@@ -5,7 +5,3 @@ import Config
 config :picture_rail,
   hardware: PictureRail.Hardware.Frame156,
   data_dir: "/root"
-
-# The viewport is started by hand over SSH (PictureRail.View.start()) until
-# it has passed the on-device soak (plan task 8.4).
-config :picture_rail, start_view: false

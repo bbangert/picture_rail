@@ -54,7 +54,7 @@ defmodule PictureRail.View do
   @spec stop() :: :ok | {:error, :not_found}
   def stop, do: Supervisor.terminate_child(PictureRail.Supervisor, PictureRail.View.Supervisor)
 
-  @doc "The running viewport's pid, or `nil`."
+  @doc "The running viewport's pid, or `nil` (also while it's being stopped)."
   @spec whereis() :: pid() | nil
   def whereis do
     with pid when is_pid(pid) <- Process.whereis(PictureRail.View.Supervisor) do
@@ -63,6 +63,9 @@ defmodule PictureRail.View do
         _ -> nil
       end)
     end
+  catch
+    # The supervisor stopped during the call (it gave up, or was stopped).
+    :exit, _ -> nil
   end
 
   @impl Viewport

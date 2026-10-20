@@ -6,12 +6,13 @@ import Config
 
 config :shoehorn, init: [:nerves_runtime, :nerves_pack]
 
-# Enable the system startup guard to check that all OTP applications
-# started. If they didn't and you're on a Nerves system that supports
-# test runs of new firmware, the firmware will automatically roll
-# back to the previous version. Delete this if implementing your own
-# way of validating that firmware is good.
-config :nerves_runtime, startup_guard_enabled: true
+# New firmware is validated by PictureRail.FirmwareGuard once the viewport
+# has run steadily, not by nerves_runtime's startup guard (which validates
+# as soon as the applications have started, before anything is drawn).
+# Firmware that isn't validated falls back to the previous version on the
+# next boot, and the guard reboots if the viewport never settles.
+config :nerves_runtime, startup_guard_enabled: false
+config :picture_rail, firmware_guard: true
 
 # Erlinit can be configured without a rootfs_overlay. See
 # https://github.com/nerves-project/erlinit/ for more information on

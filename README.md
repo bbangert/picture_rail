@@ -94,8 +94,10 @@ frame.
 
 ### Installing
 
-Upload new firmware over SSH (the device tries it once and falls back to
-the previous firmware if it doesn't validate):
+Upload new firmware over SSH. The device tries it once: it's marked good
+once the viewport has been up for 30 seconds (`PictureRail.FirmwareGuard`),
+and if that hasn't happened within 3 minutes, or the device restarts
+before then, it falls back to the previous firmware:
 
 ```sh
 ssh -i .ssh/picture_rail_ed25519 -s <device-ip> fwup < _build/frame156_dev/nerves/images/picture_rail.fw

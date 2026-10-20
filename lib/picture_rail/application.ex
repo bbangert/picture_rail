@@ -13,7 +13,7 @@ defmodule PictureRail.Application do
           {PictureRail.App, name: PictureRail.App},
           PictureRail.Immich.Cache,
           PictureRail.HA.Supervisor
-        ] ++ view()
+        ] ++ view() ++ firmware_guard()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: PictureRail.Supervisor)
   end
@@ -25,6 +25,15 @@ defmodule PictureRail.Application do
   defp view do
     if Application.get_env(:picture_rail, :start_view, true),
       do: [PictureRail.View.Supervisor.root_child()],
+      else: []
+  end
+
+  # Validates new firmware once the viewport has run steadily (Nerves
+  # targets; replaces nerves_runtime's startup guard). Last, so it only
+  # starts once everything before it has.
+  defp firmware_guard do
+    if Application.get_env(:picture_rail, :firmware_guard, false),
+      do: [PictureRail.FirmwareGuard],
       else: []
   end
 end
