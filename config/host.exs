@@ -26,6 +26,9 @@ config :homeframe,
   hardware: HomeFrame.Hardware.Host,
   data_dir: Path.expand("../tmp/data", __DIR__)
 
+# The desktop's udevd owns input devices; Nerves.UEvent shouldn't.
+config :nerves_uevent, manage_udev: false
+
 # Tests drive controllers and modules directly; don't open a window.
 if config_env() == :test do
   config :homeframe, start_view: false, data_dir: Path.expand("../tmp/test-data", __DIR__)

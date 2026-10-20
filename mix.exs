@@ -57,6 +57,7 @@ defmodule HomeFrame.MixProject do
       {:req, "~> 0.7.5"},
       {:jason, "~> 1.4"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:plug, "~> 1.16", only: :test},
 
       # Dependencies for all targets except :host
       {:nerves_pack, "~> 0.7.2", targets: @all_targets},

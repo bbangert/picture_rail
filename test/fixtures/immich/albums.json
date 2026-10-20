@@ -1,0 +1,62 @@
+[
+  {
+    "albumName": "Frame",
+    "albumThumbnailAssetId": "e5f6a7b8-0000-4000-8000-000000000002",
+    "albumUsers": [
+      {
+        "role": "owner",
+        "user": {
+          "email": "user@example.com",
+          "id": "00aa00aa-0000-4000-8000-000000000003",
+          "name": "User"
+        }
+      },
+      {
+        "role": "viewer",
+        "user": {
+          "email": "user@example.com",
+          "id": "00aa00aa-0000-4000-8000-000000000004",
+          "name": "User"
+        }
+      }
+    ],
+    "assetCount": 63,
+    "createdAt": "2026-10-14T06:01:24.376Z",
+    "description": "",
+    "endDate": "2018-12-26T00:00:00.000Z",
+    "hasSharedLink": false,
+    "id": "a1b2c3d4-0000-4000-8000-000000000001",
+    "isActivityEnabled": true,
+    "lastModifiedAssetTimestamp": "2026-10-14T06:45:19.955Z",
+    "order": "desc",
+    "shared": true,
+    "startDate": "2018-12-26T00:00:00.000Z",
+    "updatedAt": "2026-10-14T19:27:32.982Z"
+  },
+  {
+    "albumName": "Other",
+    "albumThumbnailAssetId": "e5f6a7b8-0000-4000-8000-000000000006",
+    "albumUsers": [
+      {
+        "role": "owner",
+        "user": {
+          "email": "user@example.com",
+          "id": "00aa00aa-0000-4000-8000-000000000003",
+          "name": "User"
+        }
+      }
+    ],
+    "assetCount": 11,
+    "createdAt": "2026-10-14T21:10:47.761Z",
+    "description": "",
+    "endDate": "2024-01-24T00:00:00.000Z",
+    "hasSharedLink": false,
+    "id": "a1b2c3d4-0000-4000-8000-000000000005",
+    "isActivityEnabled": true,
+    "lastModifiedAssetTimestamp": "2026-10-15T04:22:03.876Z",
+    "order": "desc",
+    "shared": false,
+    "startDate": "2023-12-24T00:00:00.000Z",
+    "updatedAt": "2026-10-15T06:03:17.284Z"
+  }
+]
