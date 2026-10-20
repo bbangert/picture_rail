@@ -17,6 +17,7 @@ defmodule HomeFrame.HA.ModelTest do
       table: table,
       app: nil,
       rebuild_ms: 10,
+      states_flush_ms: 10,
       restart_ms: 20,
       settings: fn -> Agent.get(settings, & &1) end,
       notify: &send(test, {:notify, &1}),
@@ -77,6 +78,44 @@ defmodule HomeFrame.HA.ModelTest do
     # a burst costs one rebuild
     assert_receive {:notify, {:model, 2}}
     refute_receive {:notify, {:model, 3}}, 50
+  end
+
+  test "state changes reach the controller as one batch", %{model: model} do
+    es = %EntityState{entity_id: "x", state: "on"}
+
+    for id <- ["light.b", "light.a", "light.b"] do
+      send(
+        model,
+        {:hassock_cache, self(), {:changes, %{added: [], changed: [{id, es}], removed: []}}}
+      )
+    end
+
+    assert_receive {:notify, {:states, ["light.a", "light.b"]}}
+    refute_receive {:notify, {:states, _}}, 50
+  end
+
+  test "readiness goes with the cache that reported it", %{model: model} do
+    registries = spawn(fn -> Process.sleep(:infinity) end)
+    states = spawn(fn -> Process.sleep(:infinity) end)
+    send(model, {:hassock_registry, registries, :ready})
+    send(model, {:hassock_cache, states, :ready})
+    assert_receive {:notify, {:model, 1}}
+
+    # hassock replaced its registry cache: no rebuild against the new,
+    # still empty one until it reports ready itself
+    ref = Process.monitor(registries)
+    Process.exit(registries, :kill)
+    assert_receive {:DOWN, ^ref, :process, _, :killed}
+
+    send(
+      model,
+      {:hassock_cache, states, {:changes, %{added: [{"x.y", nil}], changed: [], removed: []}}}
+    )
+
+    refute_receive {:notify, {:model, _}}, 50
+
+    send(model, {:hassock_registry, spawn(fn -> Process.sleep(:infinity) end), :ready})
+    assert_receive {:notify, {:model, 2}}
   end
 
   test "disconnects and a refused token are reported", %{model: model, table: table} do

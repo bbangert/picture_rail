@@ -11,6 +11,7 @@ defmodule HomeFrame.HA.Overview do
       "unassigned" group last), and Automations
     * `media_view/1` - media players by area
     * `devices_view/1` - entities of devices without an area, by device
+    * `device_view/2` - one device's entities
 
   The filters follow the frontend's `HOME_SUMMARIES_FILTERS` and the
   light/climate/security/maintenance view strategies (`device_class` comes
@@ -159,7 +160,7 @@ defmodule HomeFrame.HA.Overview do
   @spec media_view(source()) :: [%{area: Hassock.Area.t() | nil, entity_ids: [String.t()]}]
   def media_view(src \\ source()) do
     players = matching(src, Model.entity_ids(src.table), :media_players)
-    by_area = Enum.group_by(players, &Model.entity(&1, src.table).area_id)
+    by_area = src |> present(players) |> Enum.group_by(&elem(&1, 1).area_id, &elem(&1, 0))
 
     area_ids =
       Enum.flat_map(Model.floors(src.table), & &1.area_ids) ++
@@ -169,7 +170,8 @@ defmodule HomeFrame.HA.Overview do
       id <- area_ids,
       ids = Map.get(by_area, id, []),
       ids != [],
-      do: %{area: Model.area(id, src.table).area, entity_ids: ids}
+      %{area: area} <- [Model.area(id, src.table)],
+      do: %{area: area, entity_ids: ids}
     ) ++
       case Map.get(by_area, nil, []) do
         [] -> []
@@ -181,22 +183,39 @@ defmodule HomeFrame.HA.Overview do
   @spec devices_view(source()) :: [section()]
   def devices_view(src \\ source()) do
     ids =
-      Enum.filter(Model.entity_ids(src.table), fn id ->
-        entity = Model.entity(id, src.table)
-
-        entity.area_id == nil and entity.device_id != nil and entity.entry != nil and
-          entity.entry.platform not in @other_hidden_platforms and
-          entity.domain not in @other_hidden_domains
-      end)
+      for {id, entity} <- present(src, Model.entity_ids(src.table)),
+          entity.area_id == nil and entity.device_id != nil and entity.entry != nil,
+          entity.entry.platform not in @other_hidden_platforms,
+          entity.domain not in @other_hidden_domains,
+          do: id
 
     device_sections(src, ids, :drop_unassigned)
+  end
+
+  @doc """
+  One device's page: its entities without a category (by name) and its
+  first battery sensor, or `nil` if the device is gone.
+  """
+  @spec device_view(source(), String.t()) :: section() | nil
+  def device_view(src \\ source(), device_id) do
+    case Model.device(device_id, src.table) do
+      nil ->
+        nil
+
+      device ->
+        ids =
+          for {id, %{device_id: ^device_id}} <- present(src, Model.entity_ids(src.table)),
+              do: id
+
+        device_section(src, device_id, Index.device_name(device), ids)
+    end
   end
 
   # Remaining entities by device, by device name. Per device: the first
   # battery sensor as a badge, entities without a category as the list; a
   # device left with no entities is skipped.
   defp device_sections(src, ids, unassigned) do
-    groups = Enum.group_by(ids, &Model.entity(&1, src.table).device_id)
+    groups = src |> present(ids) |> Enum.group_by(&elem(&1, 1).device_id, &elem(&1, 0))
 
     devices =
       groups
@@ -213,6 +232,14 @@ defmodule HomeFrame.HA.Overview do
         else: []
 
     Enum.reject(devices ++ unassigned_group, &(&1.entity_ids == []))
+  end
+
+  # The ids whose rows are still there, with their entities. The model is
+  # rebuilt row by row (`Model.store/3`), so a list read before a rebuild
+  # can name an entity whose row is gone by the time it's read: it counts
+  # as absent, as the model's API says.
+  defp present(src, ids) do
+    for id <- ids, %Index.Entity{} = entity <- [Model.entity(id, src.table)], do: {id, entity}
   end
 
   defp device_section(src, device_id, name, ids) do
@@ -295,12 +322,132 @@ defmodule HomeFrame.HA.Overview do
   # -- Names --
 
   @doc """
+  The panel's navigation: the overview, each floor (as a divider) with its
+  areas, areas without a known floor (under "Other areas" when there are
+  floors), then media and devices.
+  """
+  @spec nav(source()) :: [{:divider, String.t()} | {:view, term(), String.t()}]
+  def nav(src \\ source()) do
+    floors = Model.floors(src.table)
+
+    area = fn id ->
+      with %{area: area} <- Model.area(id, src.table), do: {:view, {:area, id}, area.name}
+    end
+
+    floor_items =
+      Enum.flat_map(floors, fn %{floor: floor, area_ids: ids} ->
+        case ids |> Enum.map(area) |> Enum.reject(&is_nil/1) do
+          [] -> []
+          areas -> [{:divider, floor.name} | areas]
+        end
+      end)
+
+    others =
+      case {src.table |> Model.floorless_area_ids() |> Enum.map(area) |> Enum.reject(&is_nil/1),
+            floors} do
+        {[], _} -> []
+        {areas, []} -> areas
+        {areas, _} -> [{:divider, "Other areas"} | areas]
+      end
+
+    [{:view, :overview, "Overview"}] ++
+      floor_items ++ others ++ [{:view, :media, "Media"}, {:view, :devices, "Devices"}]
+  end
+
+  @doc """
+  A summary's page, laid out like Home Assistant's light, climate, security
+  and maintenance pages: a section per floor (titled "Areas" when there's
+  only one) with a group per area, then areas without a floor ("Other
+  areas", or "Areas" when no floor has any), then entities without an area
+  ("Other devices", or "Devices"; "Other lights"/"Lights" for lights).
+  `nil` when the summary has no entities.
+  """
+  @spec summary_view(source(), summary_kind()) ::
+          %{
+            kind: summary_kind(),
+            sections: [
+              %{title: String.t(), groups: [%{title: String.t() | nil, entity_ids: [String.t()]}]}
+            ]
+          }
+          | nil
+  def summary_view(src \\ source(), kind) do
+    case matching(src, Model.entity_ids(src.table), kind) do
+      [] -> nil
+      ids -> %{kind: kind, sections: summary_sections(src, kind, ids)}
+    end
+  end
+
+  defp summary_sections(src, kind, ids) do
+    by_area = src |> present(ids) |> Enum.group_by(&elem(&1, 1).area_id, &elem(&1, 0))
+    groups = &area_groups(src, by_area, &1)
+
+    all_floors = Model.floors(src.table)
+    # HA names a floor's section after it when the home has several floors
+    several? = Enum.count(all_floors, &(&1.area_ids != [])) > 1
+
+    floors =
+      for %{floor: floor, area_ids: area_ids} <- all_floors,
+          (gs = groups.(area_ids)) != [],
+          do: {floor.name, gs}
+
+    floor_sections =
+      for {name, gs} <- floors, do: %{title: if(several?, do: name, else: "Areas"), groups: gs}
+
+    other_areas =
+      case groups.(Model.floorless_area_ids(src.table)) do
+        [] -> []
+        gs -> [%{title: if(floors == [], do: "Areas", else: "Other areas"), groups: gs}]
+      end
+
+    no_area =
+      case Map.get(by_area, nil, []) do
+        [] ->
+          []
+
+        ids ->
+          [
+            %{
+              title: no_area_title(kind, floor_sections ++ other_areas != []),
+              groups: [%{title: nil, entity_ids: ids}]
+            }
+          ]
+      end
+
+    floor_sections ++ other_areas ++ no_area
+  end
+
+  defp area_groups(src, by_area, area_ids) do
+    for id <- area_ids,
+        ids = Map.get(by_area, id, []),
+        ids != [],
+        %{area: area} <- [Model.area(id, src.table)],
+        do: %{title: area.name, entity_ids: ids}
+  end
+
+  defp no_area_title(:light, true), do: "Other lights"
+  defp no_area_title(:light, false), do: "Lights"
+  defp no_area_title(_kind, true), do: "Other devices"
+  defp no_area_title(_kind, false), do: "Devices"
+
+  @doc """
   An entity's name. `:full` is what HA shows on its own (the state's
   `friendly_name`); `:own` is the entity's part without the device (for a
-  list under the device's heading), falling back to the device's name.
+  list under the device's heading), falling back to the device's name;
+  `:device` is the device's name, falling back to `:full` (HA's maintenance
+  page: a battery is "Door sensor", not "Battery").
   """
-  @spec name(source(), String.t(), :full | :own) :: String.t()
+  @spec name(source(), String.t(), :full | :own | :device) :: String.t()
   def name(src, entity_id, form \\ :full)
+
+  def name(src, entity_id, :device) do
+    case Model.entity(entity_id, src.table) do
+      %{device_id: device_id} when is_binary(device_id) ->
+        Index.device_name(Model.device(device_id, src.table)) || name(src, entity_id, :full)
+
+      _ ->
+        name(src, entity_id, :full)
+    end
+  end
 
   def name(src, entity_id, :full) do
     case entity_state(src, entity_id) do

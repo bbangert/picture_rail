@@ -129,6 +129,65 @@ defmodule HomeFrame.HA.OverviewTest do
     end
   end
 
+  describe "a read overlapping a model rebuild" do
+    # The model stores row by row: a list can name an entity whose row a
+    # rebuild already removed. It counts as gone; nothing raises.
+    setup do
+      src = HAFixture.source()
+      :ets.delete(src.table, {:entity, "sensor.hall_temperature"})
+      :ets.delete(src.table, {:entity, "switch.plug"})
+      :ets.delete(src.table, {:entity, "media_player.tv"})
+      %{src: src}
+    end
+
+    test "every view still builds", %{src: src} do
+      assert %{sections: _} = Overview.area_view(src, "living")
+      assert [%{entity_ids: ["sensor.plug_energy"]}] = Overview.devices_view(src)
+      # the thermostat's temperature row is gone; its other entity stays
+      assert %{entity_ids: ["climate.hall"]} = Overview.device_view(src, "dev_thermostat")
+      assert Overview.media_view(src) == []
+      assert %{floors: _} = Overview.overview(src)
+    end
+  end
+
+  test "summary pages: floor sections, area groups, then no area" do
+    src = HAFixture.source()
+
+    assert %{sections: sections} = Overview.summary_view(src, :maintenance)
+
+    assert Enum.map(sections, fn s ->
+             {s.title, Enum.map(s.groups, &{&1.title, &1.entity_ids})}
+           end) ==
+             [
+               {"Ground", [{"Living room", ["sensor.hall_battery"]}]},
+               {"Other areas", [{"Garage", ["sensor.door_battery"]}]},
+               {"Other devices", [{nil, ["sensor.phone_battery"]}]}
+             ]
+
+    assert %{sections: [%{title: "Ground"}, %{title: "Upstairs"}]} =
+             Overview.summary_view(src, :light)
+
+    assert Overview.summary_view(src, :persons).sections == [
+             %{title: "Devices", groups: [%{title: nil, entity_ids: ["person.someone"]}]}
+           ]
+  end
+
+  test "navigation: floors with their areas, then other areas" do
+    assert Overview.nav(HAFixture.source()) == [
+             {:view, :overview, "Overview"},
+             {:divider, "Ground"},
+             {:view, {:area, "kitchen"}, "Kitchen"},
+             {:view, {:area, "living"}, "Living room"},
+             {:divider, "Upstairs"},
+             {:view, {:area, "bedroom"}, "Bedroom"},
+             {:divider, "Other areas"},
+             {:view, {:area, "garage"}, "Garage"},
+             {:view, {:area, "shed"}, "Shed"},
+             {:view, :media, "Media"},
+             {:view, :devices, "Devices"}
+           ]
+  end
+
   test "names: full from HA, own part under a device heading" do
     src = HAFixture.source()
 
@@ -137,6 +196,9 @@ defmodule HomeFrame.HA.OverviewTest do
     # no name of its own: the device's (the user's name for it first)
     assert Overview.name(src, "climate.hall", :own) == "Hall thermostat"
     assert Overview.name(src, "sun.sun", :own) == "Sun"
+    # maintenance pages go by the device (and a battery without one by itself)
+    assert Overview.name(src, "sensor.door_battery", :device) == "Door sensor"
+    assert Overview.name(src, "sun.sun", :device) == "Sun"
   end
 
   test "availability: unavailable, unknown and missing states are greyed out" do
