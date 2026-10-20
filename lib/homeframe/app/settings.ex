@@ -14,6 +14,9 @@ defmodule HomeFrame.App.Settings do
       `{:error, messages}` (the previous settings stay in use)
     * `:configured` - `%{immich: boolean, home_assistant: boolean}`
     * `:settings` - `HomeFrame.Settings.public/1` of the settings
+    * `:credentials_rev` - bumped when a reload changes a credential, so
+      subscribers that read them hear about a new key or token (the
+      other exposed values don't change with it)
   """
   use Solve.Controller, events: [:loaded]
 
@@ -22,15 +25,26 @@ defmodule HomeFrame.App.Settings do
   @impl Solve.Controller
   def init(_params, _dependencies) do
     # A restarted controller picks the settings up again from the watcher.
-    if Process.whereis(Settings.Watcher),
-      do: Settings.Watcher.state(),
-      else: {Settings.defaults(), :missing}
+    {settings, status} =
+      if Process.whereis(Settings.Watcher),
+        do: Settings.Watcher.state(),
+        else: {Settings.defaults(), :missing}
+
+    {settings, status, 0}
   end
 
-  def loaded({settings, status}, _state), do: {settings, status}
+  def loaded({settings, status}, {old, _status, rev}) do
+    rev = if credentials(settings) == credentials(old), do: rev, else: rev + 1
+    {settings, status, rev}
+  end
+
+  defp credentials(settings) do
+    {settings.immich && settings.immich.api_key,
+     settings.home_assistant && settings.home_assistant.token}
+  end
 
   @impl Solve.Controller
-  def expose({settings, status}, _dependencies, _params) do
+  def expose({settings, status, credentials_rev}, _dependencies, _params) do
     %{
       loaded?: status == :ok,
       status: status,
@@ -38,7 +52,8 @@ defmodule HomeFrame.App.Settings do
         immich: settings.immich != nil,
         home_assistant: settings.home_assistant != nil
       },
-      settings: Settings.public(settings)
+      settings: Settings.public(settings),
+      credentials_rev: credentials_rev
     }
   end
 end
