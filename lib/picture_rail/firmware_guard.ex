@@ -13,8 +13,13 @@ defmodule PictureRail.FirmwareGuard do
 
   It starts after the rest of the app, so when the viewport isn't started
   at boot (`start_view: false`) the firmware is validated straight away.
-  Firmware that is already validated is left alone. Enabled with
-  `config :picture_rail, firmware_guard: true` (the Nerves targets).
+  Firmware that is already validated is left alone, and so is firmware
+  validated some other way (by hand over SSH) before the deadline. If
+  validating fails, it's retried every 30 s; the guard stays up rather than
+  crashing, since a restart storm would take the app down with it. The
+  3 minutes count from this process's start, so they begin again if it's
+  restarted. Enabled with `config :picture_rail, firmware_guard: true` (the
+  Nerves targets).
 
   Options, for tests: `:valid?`, `:validate`, `:reboot` and `:viewport`
   (functions standing in for `Nerves.Runtime` and `PictureRail.View.whereis/0`),
@@ -41,6 +46,7 @@ defmodule PictureRail.FirmwareGuard do
       :ignore
     else
       state = %{
+        valid?: valid?,
         validate: Keyword.get(opts, :validate, &Nerves.Runtime.validate_firmware/0),
         reboot: Keyword.get(opts, :reboot, &Nerves.Runtime.reboot/0),
         viewport: Keyword.get(opts, :viewport, &PictureRail.View.whereis/0),
@@ -49,7 +55,8 @@ defmodule PictureRail.FirmwareGuard do
         deadline: now() + Keyword.get(opts, :deadline_ms, @deadline_ms),
         poll_ms: Keyword.get(opts, :poll_ms, @poll_ms),
         # {viewport pid, when it was first seen}
-        seen: nil
+        seen: nil,
+        lookup_failed?: false
       }
 
       {:ok, state, {:continue, :check}}
@@ -65,12 +72,14 @@ defmodule PictureRail.FirmwareGuard do
 
   @impl GenServer
   def handle_info(:check, state), do: check(state)
+  def handle_info({:validate, why}, state), do: validate(state, why)
 
   defp check(state) do
     now = now()
+    {pid, state} = viewport(state)
 
     seen =
-      case {viewport(state), state.seen} do
+      case {pid, state.seen} do
         {nil, _} -> nil
         {pid, {pid, since}} -> {pid, since}
         {pid, _} -> {pid, now}
@@ -81,6 +90,10 @@ defmodule PictureRail.FirmwareGuard do
     cond do
       steady?(seen, now, state.steady_ms) ->
         validate(state, "the viewport has been up for #{div(state.steady_ms, 1000)} s")
+
+      now >= state.deadline and state.valid?.() ->
+        Logger.info("FirmwareGuard: the firmware was validated by something else")
+        {:stop, :normal, state}
 
       now >= state.deadline ->
         Logger.error(
@@ -96,16 +109,18 @@ defmodule PictureRail.FirmwareGuard do
     end
   end
 
-  # A lookup that fails counts as no viewport. Above all it mustn't take
-  # this process down: a :transient child that exits with {:shutdown, _}
-  # (what a call to a stopping supervisor exits with) is neither logged
-  # nor restarted, and nothing would be left to reboot.
+  # A failed lookup counts as no viewport, and never takes this process
+  # down: an exit with {:shutdown, _} would end a :transient child without
+  # a log or a restart, leaving nothing to reboot. Logged once per run of
+  # failures.
   defp viewport(state) do
-    state.viewport.()
+    {state.viewport.(), %{state | lookup_failed?: false}}
   catch
     kind, reason ->
-      Logger.warning("FirmwareGuard: viewport lookup failed: #{inspect({kind, reason})}")
-      nil
+      unless state.lookup_failed?,
+        do: Logger.warning("FirmwareGuard: viewport lookup failed: #{inspect({kind, reason})}")
+
+      {nil, %{state | lookup_failed?: true}}
   end
 
   defp steady?({_pid, since}, now, steady_ms), do: now - since >= steady_ms
@@ -113,11 +128,19 @@ defmodule PictureRail.FirmwareGuard do
 
   defp validate(state, why) do
     case state.validate.() do
-      :ok -> Logger.info("FirmwareGuard: firmware validated (#{why})")
-      other -> Logger.error("FirmwareGuard: validating the firmware failed: #{inspect(other)}")
-    end
+      :ok ->
+        Logger.info("FirmwareGuard: firmware validated (#{why})")
+        {:stop, :normal, state}
 
-    {:stop, :normal, state}
+      other ->
+        Logger.error(
+          "FirmwareGuard: validating the firmware failed: #{inspect(other)}; " <>
+            "retrying in #{div(state.steady_ms, 1000)} s"
+        )
+
+        Process.send_after(self(), {:validate, why}, state.steady_ms)
+        {:noreply, state}
+    end
   end
 
   defp now, do: System.monotonic_time(:millisecond)
