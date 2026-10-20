@@ -1,4 +1,4 @@
-defmodule HomeFrame.HAFixture do
+defmodule PictureRail.HAFixture do
   @moduledoc """
   A small Home Assistant home (test/fixtures/ha/home.json, registry and
   state JSON in HA's own format) loaded into a model table, for tests of
@@ -6,7 +6,7 @@ defmodule HomeFrame.HAFixture do
   """
 
   alias Hassock.{EntityState, Registries}
-  alias HomeFrame.HA.{Index, Model}
+  alias PictureRail.HA.{Index, Model}
 
   @path Path.expand("../fixtures/ha/home.json", __DIR__)
 

@@ -31,7 +31,7 @@ config :logger, :default_handler, false
 
 # Authorized keys: your own (~/.ssh/id_*.pub) plus any *.pub in this
 # project's .ssh/ directory (git-ignored), e.g. a key made just for the
-# device with `ssh-keygen -t ed25519 -N '' -f .ssh/homeframe_ed25519`.
+# device with `ssh-keygen -t ed25519 -N '' -f .ssh/picture_rail_ed25519`.
 keys =
   Path.wildcard(Path.join(System.user_home!(), ".ssh/id_{rsa,ecdsa,ed25519}.pub")) ++
     Path.wildcard(Path.expand("../.ssh/*.pub", __DIR__))

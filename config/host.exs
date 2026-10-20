@@ -22,8 +22,8 @@ config :nerves_runtime,
 
 # Development on a laptop: Emerge's default windowed backend, no sensors,
 # settings and caches under tmp/ in the project.
-config :homeframe,
-  hardware: HomeFrame.Hardware.Host,
+config :picture_rail,
+  hardware: PictureRail.Hardware.Host,
   data_dir: Path.expand("../tmp/data", __DIR__)
 
 # The desktop's udevd owns input devices; Nerves.UEvent shouldn't.
@@ -31,5 +31,5 @@ config :nerves_uevent, manage_udev: false
 
 # Tests drive controllers and modules directly; don't open a window.
 if config_env() == :test do
-  config :homeframe, start_view: false, data_dir: Path.expand("../tmp/test-data", __DIR__)
+  config :picture_rail, start_view: false, data_dir: Path.expand("../tmp/test-data", __DIR__)
 end

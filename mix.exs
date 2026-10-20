@@ -1,11 +1,11 @@
-defmodule HomeFrame.MixProject do
+defmodule PictureRail.MixProject do
   use Mix.Project
 
-  @app :homeframe
+  @app :picture_rail
   @version "0.1.0"
-  # Devices this app has a Nerves system and a HomeFrame.Hardware module
+  # Devices this app has a Nerves system and a PictureRail.Hardware module
   # for. To support another touch display, add its system below and its
-  # hardware module in lib/homeframe/hardware/ (see README).
+  # hardware module in lib/picture_rail/hardware/ (see README).
   @all_targets [:frame156]
 
   def project do
@@ -32,7 +32,7 @@ defmodule HomeFrame.MixProject do
   def application do
     [
       extra_applications: [:logger, :runtime_tools],
-      mod: {HomeFrame.Application, []}
+      mod: {PictureRail.Application, []}
     ]
   end
 

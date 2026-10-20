@@ -1,4 +1,4 @@
-# HomeFrame
+# Picture Rail
 
 A Home Assistant dashboard and photo frame for Nerves touch displays.
 
@@ -26,20 +26,20 @@ GPU), [Solve](https://hex.pm/packages/solve) for state, and
 
 ### Adding another touch display
 
-Everything device-specific is behind `HomeFrame.Hardware`
-(`lib/homeframe/hardware.ex`). To run HomeFrame on another Nerves device
+Everything device-specific is behind `PictureRail.Hardware`
+(`lib/picture_rail/hardware.ex`). To run Picture Rail on another Nerves device
 with a touchscreen and a GPU (or enough CPU for raster rendering):
 
 1. Add its Nerves system to `deps/0` in `mix.exs` and its target name to
    `@all_targets`.
-2. Write `lib/homeframe/hardware/<device>.ex` implementing the behaviour:
+2. Write `lib/picture_rail/hardware/<device>.ex` implementing the behaviour:
    `children/0` for any sensors or boot-time tweaks, `emerge_config/0` for
    the display output, renderer and input, and `screen_size/0` (DRM devices
-   can use `HomeFrame.Hardware.drm_screen_size/1`); see
-   `HomeFrame.Hardware.Frame156`. If the device can sense its
-   orientation, report changes with `HomeFrame.Orientation.report/1`.
+   can use `PictureRail.Hardware.drm_screen_size/1`); see
+   `PictureRail.Hardware.Frame156`. If the device can sense its
+   orientation, report changes with `PictureRail.Orientation.report/1`.
 3. Add `config/<target>.exs` with
-   `config :homeframe, hardware: HomeFrame.Hardware.<Device>, data_dir: "/root"`.
+   `config :picture_rail, hardware: PictureRail.Hardware.<Device>, data_dir: "/root"`.
 
 ## Building
 
@@ -68,7 +68,7 @@ this project's `.ssh/` directory (git-ignored). To make a key just for the
 device:
 
 ```sh
-ssh-keygen -t ed25519 -N '' -f .ssh/homeframe_ed25519
+ssh-keygen -t ed25519 -N '' -f .ssh/picture_rail_ed25519
 ```
 
 ### FRAME156 touchscreen firmware
@@ -98,15 +98,15 @@ Upload new firmware over SSH (the device tries it once and falls back to
 the previous firmware if it doesn't validate):
 
 ```sh
-ssh -i .ssh/homeframe_ed25519 -s <device-ip> fwup < _build/frame156_dev/nerves/images/homeframe.fw
+ssh -i .ssh/picture_rail_ed25519 -s <device-ip> fwup < _build/frame156_dev/nerves/images/picture_rail.fw
 ```
 
 ## Settings
 
-Settings live in a JSON file in the data directory: `/root/homeframe.json`
-on the device (`tmp/data/homeframe.json` on the host). On first boot
-HomeFrame writes a template there to fill in. Edit it over SSH; HomeFrame
-notices changes within ten seconds, or run `HomeFrame.Settings.reload()`
+Settings live in a JSON file in the data directory: `/root/picture_rail.json`
+on the device (`tmp/data/picture_rail.json` on the host). On first boot
+Picture Rail writes a template there to fill in. Edit it over SSH; Picture Rail
+notices changes within ten seconds, or run `PictureRail.Settings.reload()`
 in the device's IEx shell to see any validation errors straight away. An
 invalid file is logged and the previous settings stay in use.
 
@@ -128,7 +128,7 @@ invalid file is logged and the previous settings stay in use.
 ```
 
 Only the credentials are required; everything else has the defaults
-shown. Leave a section out to switch that service off. HomeFrame keeps
+shown. Leave a section out to switch that service off. Picture Rail keeps
 the file readable only by its owner (mode 0600).
 
 `home_assistant.ssl_verify` (default `true`) can be set to `false` for a
@@ -143,7 +143,7 @@ permissions:
 - `asset.read` - list the photos in the selected albums
 - `asset.view` - download previews and Live Photo clips
 
-HomeFrame downloads Immich's preview images (1440 px JPEG by default), not
+Picture Rail downloads Immich's preview images (1440 px JPEG by default), not
 the originals, so it doesn't need `asset.download`. If the server's
 preview format is set to WebP, previews are skipped with a warning; switch
 it back to JPEG in Immich's image settings.
@@ -166,5 +166,5 @@ works.
 ## Fonts
 
 Antonio and Noto Sans, both under the SIL Open Font License; see
-`priv/fonts/README.md`. "LCARS-style" describes the look only; HomeFrame
+`priv/fonts/README.md`. "LCARS-style" describes the look only; Picture Rail
 ships no Star Trek assets.

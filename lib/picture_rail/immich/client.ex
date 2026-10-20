@@ -1,0 +1,226 @@
+defmodule PictureRail.Immich.Client do
+  @moduledoc """
+  The Immich API calls the photo cache needs.
+
+  The API key needs `album.read`, `asset.read` and `asset.view`. Errors are
+  reduced to what the frame acts on:
+
+    * `:invalid_key` - 401: the key was revoked or mistyped
+    * `{:missing_permission, message}` - 403: the key lacks a permission
+    * `:offline` - no answer, a timeout, or a 5xx
+    * `{:unsupported_format, content_type}` - a preview that isn't JPEG or
+      PNG (the server's preview format is set to WebP)
+    * `{:http_error, status}` - anything else
+
+  The request holds the API key, so the struct's `inspect/1` leaves it out.
+  """
+
+  alias PictureRail.Immich.{Album, Asset}
+  alias PictureRail.Settings
+
+  @behaviour PictureRail.Immich.Api
+
+  @derive {Inspect, except: [:req]}
+  @enforce_keys [:req]
+  defstruct [:req]
+
+  @type t :: %__MODULE__{req: Req.Request.t()}
+  @type error ::
+          :invalid_key
+          | {:missing_permission, String.t()}
+          | :offline
+          | {:unsupported_format, String.t() | nil}
+          | {:http_error, pos_integer()}
+
+  @page_size 1000
+
+  @doc """
+  A client for the configured server. `opts` are extra Req options (tests
+  pass `plug:`).
+  """
+  @spec new(Settings.Immich.t(), keyword()) :: t()
+  def new(%Settings.Immich{url: url, api_key: key}, opts \\ []) do
+    req =
+      [
+        base_url: url <> "/api",
+        headers: [{"x-api-key", key}],
+        receive_timeout: 15_000,
+        # A 10 s connect timeout, and no reuse of a connection that sat
+        # idle: a Wi-Fi link that naps or a NAT that forgets it leaves the
+        # next request hanging. (Req takes either :finch or
+        # :connect_options, not both.)
+        finch: [conn_max_idle_time: 10_000, conn_opts: [transport_opts: [timeout: 10_000]]],
+        retry: false
+      ]
+      |> Keyword.merge(opts)
+      |> Req.new()
+
+    %__MODULE__{req: req}
+  end
+
+  @doc false
+  @impl PictureRail.Immich.Api
+  def connect(settings), do: new(settings)
+
+  @doc "Whether the server answers (needs no key)."
+  @spec ping(t()) :: :ok | {:error, error()}
+  @impl PictureRail.Immich.Api
+  def ping(client) do
+    with {:ok, %{"res" => "pong"}} <- request(client, :get, "/server/ping"), do: :ok
+  end
+
+  @doc "The server's version, `{major, minor, patch}`."
+  @spec version(t()) :: {:ok, {integer(), integer(), integer()}} | {:error, error()}
+  @impl PictureRail.Immich.Api
+  def version(client) do
+    with {:ok, %{"major" => major, "minor" => minor, "patch" => patch}} <-
+           request(client, :get, "/server/version"),
+         do: {:ok, {major, minor, patch}}
+  end
+
+  @doc "All albums the key's user owns or that are shared with them."
+  @spec list_albums(t()) :: {:ok, [Album.t()]} | {:error, error()}
+  @impl PictureRail.Immich.Api
+  def list_albums(client) do
+    with {:ok, albums} when is_list(albums) <- request(client, :get, "/albums") do
+      {:ok, albums |> Enum.map(&Album.from_api/1) |> Enum.reject(&is_nil/1)}
+    end
+  end
+
+  @doc """
+  Every photo (IMAGE asset) in the given albums. Uses the structured search
+  with cursor paging from Immich 3.2, and the older flat form with page
+  numbers before that.
+  """
+  @spec list_album_images(t(), [String.t()], {integer(), integer(), integer()}) ::
+          {:ok, [Asset.t()]} | {:error, error()}
+  @impl PictureRail.Immich.Api
+  def list_album_images(client, album_ids, version) do
+    if version >= {3, 2, 0},
+      do: fetch_cursor_pages(client, album_ids, nil, []),
+      else: fetch_numbered_pages(client, album_ids, 1, [])
+  end
+
+  defp fetch_cursor_pages(client, album_ids, cursor, acc) do
+    body =
+      %{
+        filter: %{albumIds: %{any: album_ids}, type: %{eq: "IMAGE"}},
+        size: @page_size
+      }
+      |> then(&if cursor, do: Map.put(&1, :cursor, cursor), else: &1)
+
+    with {:ok, %{"assets" => %{"items" => items} = assets}} <-
+           request(client, :post, "/search/metadata", json: body) do
+      acc = [items | acc]
+
+      case assets["nextCursor"] do
+        next when is_binary(next) -> fetch_cursor_pages(client, album_ids, next, acc)
+        _ -> {:ok, to_assets(acc)}
+      end
+    end
+  end
+
+  defp fetch_numbered_pages(client, album_ids, page, acc) do
+    body = %{albumIds: album_ids, type: "IMAGE", page: page, size: @page_size}
+
+    with {:ok, %{"assets" => %{"items" => items} = assets}} <-
+           request(client, :post, "/search/metadata", json: body) do
+      acc = [items | acc]
+
+      case parse_page(assets["nextPage"]) do
+        nil -> {:ok, to_assets(acc)}
+        next -> fetch_numbered_pages(client, album_ids, next, acc)
+      end
+    end
+  end
+
+  defp parse_page(page) when is_integer(page), do: page
+
+  defp parse_page(page) when is_binary(page) do
+    case Integer.parse(page) do
+      {n, ""} -> n
+      _ -> nil
+    end
+  end
+
+  defp parse_page(_page), do: nil
+
+  # Pages arrive newest-first in acc; an asset in two albums is kept once.
+  defp to_assets(pages) do
+    pages
+    |> Enum.reverse()
+    |> Enum.concat()
+    |> Enum.map(&Asset.from_api/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq_by(& &1.id)
+  end
+
+  @doc """
+  Download a photo's preview (a screen-sized JPEG, generated by the server)
+  to `path`. Anything but JPEG or PNG is refused, and `path` removed.
+  """
+  @spec download_preview(t(), String.t(), Path.t()) :: :ok | {:error, error()}
+  @impl PictureRail.Immich.Api
+  def download_preview(client, asset_id, path) do
+    case download(client, "/assets/#{asset_id}/thumbnail", path, params: [size: "preview"]) do
+      {:ok, type} when type in ["image/jpeg", "image/png"] ->
+        :ok
+
+      {:ok, type} ->
+        File.rm(path)
+        {:error, {:unsupported_format, type}}
+
+      error ->
+        error
+    end
+  end
+
+  @doc "Download a Live Photo's motion clip (its `live_photo_video_id`) to `path`."
+  @spec download_clip(t(), String.t(), Path.t()) :: :ok | {:error, error()}
+  @impl PictureRail.Immich.Api
+  def download_clip(client, video_id, path) do
+    with {:ok, _type} <- download(client, "/assets/#{video_id}/video/playback", path, []), do: :ok
+  end
+
+  defp download(%__MODULE__{req: req}, url, path, opts) do
+    File.rm(path)
+
+    result =
+      Req.get(req, [url: url, into: File.stream!(path), decode_body: false] ++ opts)
+
+    case result do
+      {:ok, %Req.Response{status: 200} = resp} ->
+        {:ok, content_type(resp)}
+
+      other ->
+        File.rm(path)
+        error(other)
+    end
+  end
+
+  defp content_type(resp) do
+    case Req.Response.get_header(resp, "content-type") do
+      [type | _] -> type |> String.split(";") |> hd() |> String.trim() |> String.downcase()
+      [] -> nil
+    end
+  end
+
+  defp request(%__MODULE__{req: req}, method, url, opts \\ []) do
+    case Req.request(req, [method: method, url: url] ++ opts) do
+      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 -> {:ok, body}
+      other -> error(other)
+    end
+  end
+
+  defp error({:ok, %Req.Response{status: 401}}), do: {:error, :invalid_key}
+
+  defp error({:ok, %Req.Response{status: 403, body: body}}),
+    do: {:error, {:missing_permission, message(body)}}
+
+  defp error({:ok, %Req.Response{status: status}}) when status >= 500, do: {:error, :offline}
+  defp error({:ok, %Req.Response{status: status}}), do: {:error, {:http_error, status}}
+  defp error({:error, _exception}), do: {:error, :offline}
+
+  defp message(%{"message" => message}) when is_binary(message), do: message
+  defp message(_body), do: "forbidden"
+end
