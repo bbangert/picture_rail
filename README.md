@@ -34,8 +34,9 @@ with a touchscreen and a GPU (or enough CPU for raster rendering):
    `@all_targets`.
 2. Write `lib/homeframe/hardware/<device>.ex` implementing the behaviour:
    `children/0` for any sensors or boot-time tweaks, `emerge_config/0` for
-   the display output, renderer and input (see
-   `HomeFrame.Hardware.Frame156`). If the device can sense its
+   the display output, renderer and input, and `screen_size/0` (DRM devices
+   can use `HomeFrame.Hardware.drm_screen_size/1`); see
+   `HomeFrame.Hardware.Frame156`. If the device can sense its
    orientation, report changes with `HomeFrame.Orientation.report/1`.
 3. Add `config/<target>.exs` with
    `config :homeframe, hardware: HomeFrame.Hardware.<Device>, data_dir: "/root"`.

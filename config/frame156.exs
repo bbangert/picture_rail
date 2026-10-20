@@ -5,3 +5,7 @@ import Config
 config :homeframe,
   hardware: HomeFrame.Hardware.Frame156,
   data_dir: "/root"
+
+# The viewport is started by hand over SSH (HomeFrame.View.start()) until
+# it has passed the on-device soak (plan task 8.4).
+config :homeframe, start_view: false

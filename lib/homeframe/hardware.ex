@@ -25,6 +25,35 @@ defmodule HomeFrame.Hardware do
   """
   @callback emerge_config() :: keyword()
 
+  @doc """
+  The screen's size in pixels, `{width, height}`, or `nil` to learn it from
+  Emerge's `:resize` events (a desktop window). DRM output sends no resize
+  event, and a portrait UI needs the size to lay itself out.
+  """
+  @callback screen_size() :: {pos_integer(), pos_integer()} | nil
+
+  @doc """
+  The mode of the first connected connector on a DRM card, read from
+  sysfs (`/sys/class/drm/<card>-*/modes`), or `nil`.
+  """
+  @spec drm_screen_size(String.t(), Path.t()) :: {pos_integer(), pos_integer()} | nil
+  def drm_screen_size(card \\ "card0", sysfs \\ "/sys/class/drm") do
+    Path.join(sysfs, "#{card}-*")
+    |> Path.wildcard()
+    |> Enum.find_value(fn connector ->
+      with {:ok, "connected" <> _} <- File.read(Path.join(connector, "status")),
+           {:ok, modes} <- File.read(Path.join(connector, "modes")),
+           [mode | _] <- String.split(modes, "\n", trim: true),
+           [w, h] <- String.split(mode, "x"),
+           {w, ""} <- Integer.parse(w),
+           {h, _} <- Integer.parse(h) do
+        {w, h}
+      else
+        _ -> nil
+      end
+    end)
+  end
+
   @doc "The configured hardware module."
   @spec impl() :: module()
   def impl, do: Application.get_env(:homeframe, :hardware, HomeFrame.Hardware.Host)

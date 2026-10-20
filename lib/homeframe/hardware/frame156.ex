@@ -14,6 +14,10 @@ defmodule HomeFrame.Hardware.Frame156 do
   @impl HomeFrame.Hardware
   def children, do: [Accelerometer, DdrRate]
 
+  # The panel varies by unit (1920x1080 or 1366x768), so read the mode.
+  @impl HomeFrame.Hardware
+  def screen_size, do: HomeFrame.Hardware.drm_screen_size("card0")
+
   @impl HomeFrame.Hardware
   def emerge_config do
     [
