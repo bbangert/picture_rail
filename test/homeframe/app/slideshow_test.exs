@@ -65,6 +65,11 @@ defmodule HomeFrame.App.SlideshowTest do
   end
 
   test "with nothing to show yet it looks again soon; the same photo isn't re-shown" do
+    # soon: the empty retry (2 s), not the (here, minute-long) slide interval
+    slow = put_in(@deps.settings.settings.slideshow.interval_ms, 60_000)
+    empty = Slideshow.tick(init(), slow, photos([]))
+    assert Process.read_timer(empty.timer) in 1_000..2_000
+
     state = Slideshow.tick(init(), @deps, photos([]))
     assert %{current: nil, index: 0} = Slideshow.expose(state, @deps, nil)
 

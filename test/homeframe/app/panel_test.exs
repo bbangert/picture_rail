@@ -9,7 +9,7 @@ defmodule HomeFrame.App.PanelTest do
 
   test "a tap shows the panel on the overview, and it hides after the timeout" do
     state = Panel.show(nil, Panel.init(nil, @deps), @deps)
-    assert exposed(state) == %{visible?: true, view: :overview, depth: 0}
+    assert exposed(state) == %{visible?: true, view: :overview, depth: 0, page: 0, nav_page: 0}
 
     assert_receive {:timeout, token}
     state = Panel.timed_out(token, state)
@@ -38,6 +38,24 @@ defmodule HomeFrame.App.PanelTest do
     state = Panel.hide(nil, state)
     state = Panel.show(nil, state, @deps)
     assert %{view: :overview, depth: 0} = exposed(state)
+  end
+
+  test "pages belong to their view: back returns to the page left; hiding resets them" do
+    state = Panel.show(nil, Panel.init(nil, @deps), @deps)
+    state = Panel.page(2, state, @deps)
+    state = Panel.nav_page(1, state, @deps)
+    state = Panel.open({:area, "kitchen"}, state, @deps)
+    assert %{view: {:area, "kitchen"}, page: 0, nav_page: 1} = exposed(state)
+
+    state = Panel.page(1, state, @deps)
+    state = Panel.open({:device, "d"}, state, @deps)
+    state = Panel.back(nil, state, @deps)
+    assert %{view: {:area, "kitchen"}, page: 1} = exposed(state)
+    assert %{view: :overview, page: 2} = exposed(Panel.back(nil, state, @deps))
+
+    # the idle timeout (the current timer's) brings it back fresh
+    state = state |> then(&Panel.timed_out(&1.token, &1)) |> then(&Panel.show(nil, &1, @deps))
+    assert %{view: :overview, page: 0, nav_page: 0} = exposed(state)
   end
 
   test "activity while hidden doesn't show the panel" do

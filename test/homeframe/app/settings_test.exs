@@ -22,9 +22,10 @@ defmodule HomeFrame.App.SettingsTest do
     assert %{loaded?: false, status: {:error, ["x"]}} = exposed
   end
 
-  test "the running app's controller picks up the watcher's settings" do
-    exposed = Solve.subscribe(HomeFrame.App, :settings)
-    assert %{status: status} = exposed
-    assert status in [:ok, :missing, :template]
+  test "a (re)started controller picks the settings up from the running watcher" do
+    # the watcher is the app's singleton; its first report can come before
+    # the app is up, so init's read is what a fresh controller has
+    assert Controller.init(nil, %{}) == Settings.Watcher.state()
+    refute match?({_, :missing}, Settings.Watcher.state())
   end
 end

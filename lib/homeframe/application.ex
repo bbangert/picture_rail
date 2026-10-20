@@ -18,10 +18,13 @@ defmodule HomeFrame.Application do
     Supervisor.start_link(children, strategy: :one_for_one, name: HomeFrame.Supervisor)
   end
 
-  # Started last, once the state it renders exists. Devices can leave it to
-  # be started by hand (`HomeFrame.View.start/1`) while a new viewport is
-  # being tried out, so a native crash can't reboot-loop validated firmware.
+  # Started last, once the state it renders exists, under its own restart
+  # budget (`HomeFrame.View.Supervisor`). Devices can leave it to be started
+  # by hand (`HomeFrame.View.start/1`) while a new viewport is being tried
+  # out.
   defp view do
-    if Application.get_env(:homeframe, :start_view, true), do: [HomeFrame.View], else: []
+    if Application.get_env(:homeframe, :start_view, true),
+      do: [HomeFrame.View.Supervisor.root_child()],
+      else: []
   end
 end

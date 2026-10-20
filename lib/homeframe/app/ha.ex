@@ -1,34 +1,41 @@
 defmodule HomeFrame.App.HA do
   @moduledoc """
   `:ha` controller: Home Assistant's connection status, the model revision,
-  and, while the panel is up, the slice of the model its view shows.
+  and, while the panel is up, what the panel's view shows.
 
-  Events from `HomeFrame.HA.Model`:
+  Events from `HomeFrame.HA.Model` and `HomeFrame.HA.EnergyPoller`:
 
     * `:status` - the connection status
     * `:model` - a new model revision
-    * `:states` - ids of entities whose state changed; the slice is
-      recomputed only if one of them is on screen
+    * `:states` - ids of entities whose state changed (batched by the model)
+    * `:energy` - today's energy summary
 
   From the view:
 
-    * `:call` - `%{domain:, service:, entity_id:, data: map, optimistic: state | nil}`.
-      The call runs in a task (the `:call_service` callback). With
-      `optimistic`, the entity shows that state at once, until Home
-      Assistant reports a change, the call fails (rolled back, and
-      `error` set), or 10 s pass.
+    * `:call` - `%{domain:, service:, entity_id:, data: map, optimistic: state,
+      optimistic_attrs: map}` (both optimistic keys optional). The call runs
+      in a task (the `:call_service` callback). With an optimistic state or
+      attributes, the entity shows them at once, until Home Assistant
+      reports them, the call fails (rolled back, and `error` set), or 10 s
+      pass.
 
-  Exposes `%{status:, revision:, view:, slice:, states:, error:}`. `slice`
-  is `HomeFrame.HA.Overview`'s result for the panel's view (`nil` while the
-  panel is down); `states` maps each entity id in it to its state, with
-  pending optimistic states applied. Disconnected, everything stays, and
-  `status` tells the view to grey it out.
+  Exposes `%{status:, revision:, view:, slice:, states:, nav:, energy:, error:}`.
+  `slice` is `HomeFrame.HA.Overview`'s result for the panel's view, or
+  `:loading` before the model's first build, `:gone` when what the view
+  showed was removed in Home Assistant, `nil` while the panel is down.
+  `states` maps each entity id on screen to its state, pending optimistic
+  values applied. Disconnected, everything stays, and `status` tells the
+  view to grey it out.
+
+  Solve calls `expose/3` after every event, so the slice is cached in this
+  process per view, model revision and on-screen change (`tick`): an event
+  for an entity that isn't on screen costs a map lookup.
   """
-  use Solve.Controller, events: [:status, :model, :states, :call]
+  use Solve.Controller, events: [:status, :model, :states, :call, :energy]
 
   require Logger
 
-  alias HomeFrame.HA.{Model, Overview}
+  alias HomeFrame.HA.{EnergyPoller, Model, Overview}
 
   @optimistic_ms 10_000
 
@@ -38,20 +45,20 @@ defmodule HomeFrame.App.HA do
     %{
       status: Model.status(),
       revision: Model.revision(),
-      # bumped when a state on screen changes, so the slice is recomputed
       tick: 0,
-      shown: nil,
       pending: %{},
-      error: nil
+      error: nil,
+      energy: EnergyPoller.latest()
     }
   end
 
   def status(status, state), do: %{state | status: status}
-  def model(revision, state), do: %{state | revision: revision, shown: nil}
+  def model(revision, state), do: %{state | revision: revision}
+  def energy(summary, state), do: %{state | energy: summary}
 
   def states(ids, state, deps, _callbacks, params) do
-    state = settle(state, ids)
-    {state, shown} = shown_ids(state, deps, params)
+    state = settle(state, ids, source(params))
+    shown = state |> slice(deps, params) |> slice_ids() |> MapSet.new()
 
     if Enum.any?(ids, &MapSet.member?(shown, &1)),
       do: %{state | tick: state.tick + 1},
@@ -68,25 +75,28 @@ defmodule HomeFrame.App.HA do
   def handle_info({:expire, entity_id, ref}, state), do: expire(entity_id, ref, state)
   def handle_info(_message, state), do: state
 
+  # -- Service calls and optimistic state --
+
   @doc false
   @spec start_call(map(), map(), map()) :: map()
   def start_call(request, state, callbacks) do
     %{ref: ref} = callbacks.call_service.(request)
+    optimistic = Map.get(request, :optimistic)
+    attrs = Map.get(request, :optimistic_attrs, %{})
 
-    case Map.get(request, :optimistic) do
-      nil ->
-        %{state | error: nil}
-
-      optimistic ->
-        Process.send_after(self(), {:expire, request.entity_id, ref}, @optimistic_ms)
-        pending = Map.put(state.pending, request.entity_id, %{state: optimistic, ref: ref})
-        %{state | pending: pending, error: nil, tick: state.tick + 1}
+    if optimistic == nil and attrs == %{} do
+      %{state | error: nil}
+    else
+      Process.send_after(self(), {:expire, request.entity_id, ref}, @optimistic_ms)
+      entry = %{state: optimistic, attrs: attrs, ref: ref}
+      pending = Map.put(state.pending, request.entity_id, entry)
+      %{state | pending: pending, error: nil, tick: state.tick + 1}
     end
   end
 
   @doc false
-  # A finished call: success keeps the optimistic state until HA reports
-  # the change; failure rolls it back.
+  # A finished call: success keeps the optimistic value until HA reports
+  # it; failure rolls it back.
   @spec call_done(reference(), term(), map()) :: map()
   def call_done(ref, result, state) do
     Process.demonitor(ref, [:flush])
@@ -112,38 +122,97 @@ defmodule HomeFrame.App.HA do
     end
   end
 
-  # Home Assistant reported a change: its state replaces the optimistic one.
-  defp settle(state, ids), do: %{state | pending: Map.drop(state.pending, ids)}
+  # A pending value ends when Home Assistant reports it, not on whichever
+  # report comes next: one from before the call, or from an earlier tap,
+  # leaves it in place.
+  defp settle(state, ids, src) do
+    pending =
+      Enum.reduce(ids, state.pending, fn id, pending ->
+        with %{^id => entry} <- pending, true <- reported?(src.state.(id), entry) do
+          Map.delete(pending, id)
+        else
+          _ -> pending
+        end
+      end)
 
-  # The entity ids on screen, cached per view and model revision.
-  defp shown_ids(state, deps, params) do
-    key = {view(deps), state.revision}
-
-    case state.shown do
-      {^key, ids} ->
-        {state, ids}
-
-      _ ->
-        ids = state |> slice(deps, params) |> slice_ids() |> MapSet.new()
-        {%{state | shown: {key, ids}}, ids}
-    end
+    %{state | pending: pending}
   end
+
+  @doc false
+  @spec reported?(Hassock.EntityState.t() | nil, map()) :: boolean()
+  def reported?(nil, _entry), do: false
+
+  def reported?(es, %{state: wanted, attrs: attrs}) do
+    (wanted == nil or es.state == wanted) and
+      Enum.all?(attrs, fn {key, value} -> close?(es.attributes[key], value) end)
+  end
+
+  # Home Assistant rounds (brightness 0-255 from a percentage, positions).
+  defp close?(a, b) when is_number(a) and is_number(b), do: abs(a - b) <= max(1.5, abs(b) * 0.02)
+  defp close?(a, b), do: a == b
+
+  defp with_pending(es, nil), do: es
+  defp with_pending(nil, _pending), do: nil
+
+  defp with_pending(es, %{state: wanted, attrs: attrs}) do
+    %{es | state: wanted || es.state, attributes: Map.merge(es.attributes || %{}, attrs)}
+  end
+
+  # -- The slice --
 
   defp view(%{panel: %{visible?: true, view: view}}), do: view
   defp view(_deps), do: nil
 
   @doc false
+  # What the view shows, cached per {view, revision, tick} in this process.
   @spec slice(map(), map(), term()) :: term()
-  def slice(_state, deps, params) do
-    src = source(params)
-
+  def slice(state, deps, params) do
     case view(deps) do
-      nil -> nil
-      :overview -> Overview.overview(src)
-      {:area, id} -> Overview.area_view(src, id)
-      :media -> Overview.media_view(src)
-      :devices -> Overview.devices_view(src)
-      {:entity, id} -> %{entity_id: id}
+      nil ->
+        nil
+
+      :energy ->
+        state.energy
+
+      view ->
+        memo({:slice, view, state.revision, state.tick, params}, fn ->
+          compute(view, state, params)
+        end)
+    end
+  end
+
+  defp compute(_view, %{revision: 0}, _params), do: :loading
+
+  defp compute(view, _state, params), do: view_slice(view, source(params)) || :gone
+
+  defp view_slice(:overview, src), do: Overview.overview(src)
+  defp view_slice({:area, id}, src), do: Overview.area_view(src, id)
+  defp view_slice(:media, src), do: Overview.media_view(src)
+  defp view_slice(:devices, src), do: Overview.devices_view(src)
+  defp view_slice({:summary, kind}, src), do: Overview.summary_view(src, kind)
+  defp view_slice({:device, id}, src), do: Overview.device_view(src, id)
+
+  defp view_slice({:entity, id}, src),
+    do: if(Model.entity(id, src.table), do: %{entity_id: id})
+
+  defp nav(state, params) do
+    memo({:nav, state.revision, params}, fn ->
+      if state.revision > 0, do: Overview.nav(source(params)), else: []
+    end)
+  end
+
+  # One cached value per kind of key: the last one computed.
+  defp memo(key, fun) do
+    slot = {__MODULE__, elem(key, 0)}
+
+    case Process.get(slot) do
+      {^key, value} ->
+        value
+
+      _ ->
+        value = fun.()
+        Process.put(slot, {key, value})
+        value
     end
   end
 
@@ -152,8 +221,15 @@ defmodule HomeFrame.App.HA do
 
   @doc "Every entity id a slice shows."
   @spec slice_ids(term()) :: [String.t()]
-  def slice_ids(nil), do: []
+  def slice_ids(slice) when slice in [nil, :loading, :gone], do: []
   def slice_ids(%{entity_id: id}), do: [id]
+  # the energy page shows the grid's live power
+  def slice_ids(%{totals: _, power_entity: id}), do: [id]
+
+  def slice_ids(%{kind: _, sections: sections}),
+    do: for(s <- sections, g <- s.groups, id <- g.entity_ids, do: id)
+
+  def slice_ids(%{kind: :device} = s), do: [s.battery | s.entity_ids]
 
   def slice_ids(%{summaries: summaries, floors: floors, other_areas: others}) do
     temps =
@@ -165,17 +241,23 @@ defmodule HomeFrame.App.HA do
   end
 
   def slice_ids(%{sections: sections, area: area}) do
-    Enum.flat_map(sections, &[Map.get(&1, :battery) | &1.entity_ids]) ++
+    Enum.flat_map(sections, &section_ids/1) ++
       [area.temperature_entity_id, area.humidity_entity_id]
   end
 
-  def slice_ids(groups) when is_list(groups),
-    do: Enum.flat_map(groups, &[Map.get(&1, :battery) | &1.entity_ids])
+  def slice_ids(groups) when is_list(groups), do: Enum.flat_map(groups, &section_ids/1)
+
+  # A device's entities are on its own page; its pill only shows the battery.
+  defp section_ids(%{kind: :device, device_id: id, battery: battery}) when is_binary(id),
+    do: [battery]
+
+  defp section_ids(section), do: [Map.get(section, :battery) | section.entity_ids]
 
   @impl Solve.Controller
   def expose(state, deps, params) do
     slice = slice(state, deps, params)
     src = source(params)
+    visible? = view(deps) != nil
 
     states =
       for id <- slice_ids(slice), id != nil, into: %{} do
@@ -188,11 +270,10 @@ defmodule HomeFrame.App.HA do
       view: view(deps),
       slice: slice,
       states: states,
+      nav: if(visible?, do: nav(state, params), else: []),
+      # only while the panel is up, so a refresh doesn't redraw the slideshow
+      energy: if(visible?, do: state.energy),
       error: state.error
     }
   end
-
-  defp with_pending(es, nil), do: es
-  defp with_pending(nil, _pending), do: nil
-  defp with_pending(es, %{state: optimistic}), do: %{es | state: optimistic}
 end
