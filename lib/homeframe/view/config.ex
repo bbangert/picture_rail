@@ -5,10 +5,19 @@ defmodule HomeFrame.View.Config do
 
   Photos are decoded at their on-screen size and the decoded-image cache
   is kept small (16 images, 64 MB), so a device with 1 GB of RAM never
-  holds full-size originals.
+  holds full-size originals. The renderer's cache of painted layers (a
+  full-screen layer is about 8 MB) is capped at 64 MB, down from 640 MB.
   """
 
-  alias Emerge.Config.{AssetCache, Assets, Font, RuntimePaths}
+  alias Emerge.Config.{
+    AssetCache,
+    Assets,
+    Font,
+    PaintLayerCache,
+    Renderer,
+    RendererCache,
+    RuntimePaths
+  }
 
   @fonts [
     {"Antonio", "fonts/Antonio-Regular.ttf", 400},
@@ -37,6 +46,25 @@ defmodule HomeFrame.View.Config do
       }
     }
 
-    struct!(base, hardware.emerge_config())
+    base
+    |> struct!(hardware.emerge_config())
+    |> cap_renderer_cache()
+  end
+
+  defp cap_renderer_cache(config) do
+    renderer =
+      case config.renderer do
+        %Renderer{} = renderer -> renderer
+        options -> struct!(Renderer, options)
+      end
+
+    cache = %RendererCache{
+      paint_layer: %PaintLayerCache{
+        max_bytes: 64 * 1024 * 1024,
+        max_entry_bytes: 16 * 1024 * 1024
+      }
+    }
+
+    %{config | renderer: %{renderer | cache: cache}}
   end
 end

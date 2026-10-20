@@ -16,7 +16,7 @@ defmodule HomeFrame.View do
   `:resize` events (a desktop window).
 
   Start options: `spike: true` shows the rotation test card instead of the
-  normal UI (plan task 2.3).
+  normal UI (plan task 2.3); `stats: true` logs Emerge's frame statistics.
   """
   use Emerge
   use Solve.Lookup
@@ -24,7 +24,7 @@ defmodule HomeFrame.View do
   require Logger
 
   alias HomeFrame.App
-  alias HomeFrame.View.Config
+  alias HomeFrame.View.{Config, Status}
 
   @doc """
   Start the viewport under the app's supervisor (for starting it by hand
@@ -48,6 +48,11 @@ defmodule HomeFrame.View do
     config = Config.build()
     config = %{config | input: add_events(config.input, [:resize])}
 
+    config =
+      if Keyword.get(opts, :stats, false),
+        do: %{config | diagnostics: %Emerge.Config.Diagnostics{logs: [:stats]}},
+        else: config
+
     state = %{
       size: HomeFrame.Hardware.impl().screen_size(),
       spike?: Keyword.get(opts, :spike, false),
@@ -64,10 +69,13 @@ defmodule HomeFrame.View do
   defp add_events(%Emerge.Config.Input{} = input, extra),
     do: %{input | events: Enum.uniq(input.events ++ extra)}
 
+  @orientation_fade_ms 400
+
   @impl Viewport
   def render(state) do
     orientation = solve(App, :orientation)
     panel = solve(App, :panel)
+    slideshow = solve(App, :slideshow)
 
     el(
       [
@@ -75,15 +83,17 @@ defmodule HomeFrame.View do
         height(fill()),
         Background.color(color(:black)),
         Font.family("Antonio"),
-        Nearby.in_front(container(state, orientation, panel))
+        Nearby.in_front(container(state, orientation, panel, slideshow))
       ],
       none()
     )
   end
 
-  # The stable container: rotated to the orientation, photos inside, the
-  # panel in front.
-  defp container(state, orientation, panel) do
+  # The container stays mounted while photos change (only a turn of the
+  # frame re-mounts it, fading in from black): it is rotated to the
+  # orientation, holds the photo that is fading out as its background, the
+  # photo layer inside and the panel in front.
+  defp container(state, orientation, panel, slideshow) do
     overlay =
       cond do
         state.spike? -> [Nearby.in_front(spike_card(state, orientation))]
@@ -91,9 +101,22 @@ defmodule HomeFrame.View do
         true -> []
       end
 
+    previous =
+      case slideshow do
+        %{previous: %{path: path}} -> [Background.image({:path, path}, fit: :contain)]
+        _ -> []
+      end
+
     el(
-      rotation_attrs(state.size, orientation) ++ overlay,
-      photo_layer(state, panel)
+      [
+        key({:orientation, orientation && orientation.orientation}),
+        Animation.animate_enter(
+          [[Transform.alpha(0.0)], [Transform.alpha(1.0)]],
+          @orientation_fade_ms,
+          :ease_out
+        )
+      ] ++ rotation_attrs(state.size, orientation) ++ previous ++ overlay,
+      photo_layer(state, panel, slideshow)
     )
   end
 
@@ -105,21 +128,66 @@ defmodule HomeFrame.View do
 
   defp rotation_attrs(_size, _orientation), do: [width(fill()), height(fill())]
 
-  defp photo_layer(state, panel) do
-    photo =
-      case sample_photo() do
-        nil -> []
-        path -> [Background.image({:path, path}, fit: :contain)]
-      end
-
+  # Each photo fades in on its own black, keyed layer (so nothing of the
+  # previous photo shows in the letterbox bars). A tap anywhere shows the
+  # panel.
+  defp photo_layer(state, panel, slideshow) do
     tap = if panel && !state.spike?, do: [Event.on_press(event(panel, :show))], else: []
 
-    el([width(fill()), height(fill()), Background.color(color(:black))] ++ photo ++ tap, none())
+    case slideshow do
+      %{current: %{path: path}, index: index, fade_ms: fade_ms} ->
+        el(
+          [
+            key({:photo, index}),
+            width(fill()),
+            height(fill()),
+            Background.color(color(:black)),
+            Animation.animate_enter(
+              [[Transform.alpha(0.0)], [Transform.alpha(1.0)]],
+              fade_ms,
+              :ease_in_out
+            )
+          ],
+          el(
+            [width(fill()), height(fill()), Background.image({:path, path}, fit: :contain)] ++ tap,
+            none()
+          )
+        )
+
+      _ ->
+        el(
+          [width(fill()), height(fill()), Background.color(color(:black))] ++ tap,
+          status_block()
+        )
+    end
   end
 
-  # Until the slideshow exists (phase 5): the first cached photo, if any.
-  defp sample_photo do
-    HomeFrame.Paths.photo_cache_dir() |> Path.join("*.jpg") |> Path.wildcard() |> List.first()
+  # Nothing to show yet: a small status readout in the corner.
+  defp status_block do
+    message = Status.message(solve(App, :settings), solve(App, :immich))
+
+    el(
+      [align_bottom(), align_left(), padding(48)],
+      row([spacing(12)], [
+        el(
+          [
+            width(px(24)),
+            height(px(56)),
+            Border.rounded(12),
+            Background.color(color_rgb(0xFF, 0x99, 0x00))
+          ],
+          none()
+        ),
+        el(
+          [
+            center_y(),
+            Font.size(40),
+            Font.color(color_rgb(0xFF, 0x99, 0x00))
+          ],
+          text(String.upcase(message))
+        )
+      ])
+    )
   end
 
   defp panel_placeholder(panel) do
