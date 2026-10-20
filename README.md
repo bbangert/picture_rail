@@ -99,9 +99,11 @@ ssh -i .ssh/homeframe_ed25519 -s <device-ip> fwup < _build/frame156_dev/nerves/i
 ## Settings
 
 Settings live in a JSON file in the data directory: `/root/homeframe.json`
-on the device (`tmp/data/homeframe.json` on the host). Edit it over SSH;
-HomeFrame notices changes within ten seconds, or run
-`HomeFrame.Settings.reload()` in the device's IEx shell.
+on the device (`tmp/data/homeframe.json` on the host). On first boot
+HomeFrame writes a template there to fill in. Edit it over SSH; HomeFrame
+notices changes within ten seconds, or run `HomeFrame.Settings.reload()`
+in the device's IEx shell to see any validation errors straight away. An
+invalid file is logged and the previous settings stay in use.
 
 ```json
 {
@@ -121,7 +123,11 @@ HomeFrame notices changes within ten seconds, or run
 ```
 
 Only the credentials are required; everything else has the defaults
-shown. Keep the file readable only by root (`chmod 600`).
+shown. Leave a section out to switch that service off. HomeFrame keeps
+the file readable only by its owner (mode 0600).
+
+`home_assistant.ssl_verify` (default `true`) can be set to `false` for a
+self-signed certificate on an `https://` URL.
 
 ### Immich API key
 

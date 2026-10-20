@@ -8,7 +8,9 @@ defmodule HomeFrame.Application do
     children =
       HomeFrame.Hardware.impl().children() ++
         [
-          {Task.Supervisor, name: HomeFrame.TaskSup}
+          {Task.Supervisor, name: HomeFrame.TaskSup},
+          HomeFrame.Settings.Watcher,
+          {HomeFrame.App, name: HomeFrame.App}
         ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: HomeFrame.Supervisor)
