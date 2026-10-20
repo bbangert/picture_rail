@@ -205,9 +205,9 @@ defmodule HomeFrame.Immich.Cache do
   defp connect(%{conn: nil} = state), do: state
 
   defp connect(state) do
-    with :ok <- state.api.ping(state.conn),
-         {:ok, version} <- state.api.version(state.conn),
-         {:ok, albums} <- state.api.list_albums(state.conn) do
+    with :ok <- call(state, :ping, []),
+         {:ok, version} <- call(state, :version, []),
+         {:ok, albums} <- call(state, :list_albums, []) do
       %{state | version: version, backoff_ms: state.opts.backoff_initial_ms}
       |> refresh_index(albums)
       |> maybe_download()
@@ -220,7 +220,7 @@ defmodule HomeFrame.Immich.Cache do
   defp poll_albums(%{conn: nil} = state), do: state
 
   defp poll_albums(state) do
-    case state.api.list_albums(state.conn) do
+    case call(state, :list_albums, []) do
       {:ok, albums} ->
         state |> refresh_index(albums) |> schedule(:poll_albums, state.opts.album_poll_ms)
 
@@ -252,7 +252,7 @@ defmodule HomeFrame.Immich.Cache do
   end
 
   defp list_images(state, album_ids, versions) do
-    case state.api.list_album_images(state.conn, album_ids, state.version) do
+    case call(state, :list_album_images, [album_ids, state.version]) do
       {:ok, assets} ->
         Logger.info("Immich cache: #{length(assets)} photos in #{length(album_ids)} album(s)")
 
@@ -280,6 +280,21 @@ defmodule HomeFrame.Immich.Cache do
     %{state | backoff_ms: min(delay * 2, state.opts.backoff_max_ms)}
     |> set_status(status)
     |> schedule(:connect, delay)
+  end
+
+  # The Immich side is outside our control: an exception there (a bug, an
+  # unexpected response) is logged and treated like being offline, so it
+  # can't take the app down with it.
+  defp call(state, function, args) do
+    apply(state.api, function, [state.conn | args])
+  rescue
+    exception ->
+      Logger.error(
+        "Immich cache: #{function} raised: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      {:error, :offline}
   end
 
   # -- The window --
@@ -427,6 +442,14 @@ defmodule HomeFrame.Immich.Cache do
   defp download_done({:error, {:http_error, status}}, asset, state) do
     Logger.warning("Immich cache: skipping #{asset.id} (HTTP #{status})")
     %{state | bad: MapSet.put(state.bad, key(asset))} |> maybe_download()
+  end
+
+  # A download that stalled or timed out doesn't mean Immich is down (the
+  # device's Wi-Fi can stall): check with a ping and carry on; only a
+  # failed ping counts as offline.
+  defp download_done({:error, :offline}, asset, state) do
+    Logger.warning("Immich cache: download of #{asset.id} failed, checking the server")
+    schedule(state, :connect, 1_000)
   end
 
   defp download_done({:error, reason}, _asset, state), do: failed(state, reason)

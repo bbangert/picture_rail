@@ -179,4 +179,21 @@ defmodule HomeFrame.Immich.ClientTest do
     stub(stub, &Req.Test.transport_error(&1, :econnrefused))
     assert Client.ping(client) == {:error, :offline}
   end
+
+  # Without a plug: the real Finch path (Req.Test stubs skip it), so Req
+  # option errors show up here.
+  test "an unreachable server through the real HTTP stack is :offline" do
+    {:ok, listen} = :gen_tcp.listen(0, ip: :loopback)
+    {:ok, port} = :inet.port(listen)
+    :gen_tcp.close(listen)
+
+    client = Client.new(%Settings.Immich{url: "http://127.0.0.1:#{port}", api_key: "k"})
+    assert Client.ping(client) == {:error, :offline}
+
+    assert Client.download_preview(
+             client,
+             "x",
+             Path.join(System.tmp_dir!(), "hf-unreachable.jpg")
+           ) == {:error, :offline}
+  end
 end

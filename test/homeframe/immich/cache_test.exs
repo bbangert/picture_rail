@@ -39,7 +39,11 @@ defmodule HomeFrame.Immich.CacheTest do
     @impl true
     def connect(_settings), do: raise("tests pass :conn")
     @impl true
-    def ping(agent), do: call(agent, :ping, fn _ -> :ok end)
+    def ping(agent) do
+      if Agent.get(agent, &Map.get(&1, :raise)), do: raise("boom")
+      call(agent, :ping, fn _ -> :ok end)
+    end
+
     @impl true
     def version(agent), do: call(agent, :version, fn _ -> {:ok, {3, 3, 1}} end)
     @impl true
@@ -200,6 +204,26 @@ defmodule HomeFrame.Immich.CacheTest do
     assert Cache.stats(cache).ready == 2
     ids = for _ <- 1..2, do: elem(Cache.next(cache), 1).asset.id
     refute "p2" in ids
+  end
+
+  test "a download that times out doesn't make the cache go offline", %{tmp_dir: dir} do
+    agent = Fake.start(Enum.map(1..3, &asset/1), formats: %{"p2" => {:error, :offline}})
+    {_pid, cache} = start_cache(agent, dir)
+
+    wait(fn -> Cache.stats(cache).ready >= 2 end)
+    assert Cache.stats(cache).status == :online
+    refute_received {:stats, %{status: :offline}}
+  end
+
+  test "an exception from the Immich side counts as offline, not a crash", %{tmp_dir: dir} do
+    agent = Fake.start([asset(1)])
+    Fake.set(agent, &Map.put(&1, :raise, true))
+    {pid, cache} = start_cache(agent, dir)
+
+    assert_receive {:stats, %{status: :offline}}, 1_000
+    assert Process.alive?(pid)
+    Fake.set(agent, &Map.put(&1, :raise, false))
+    wait(fn -> Cache.stats(cache).ready == 1 end)
   end
 
   test "a revoked key is reported", %{tmp_dir: dir} do

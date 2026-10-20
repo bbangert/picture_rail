@@ -44,8 +44,12 @@ defmodule HomeFrame.Immich.Client do
       [
         base_url: url <> "/api",
         headers: [{"x-api-key", key}],
-        connect_options: [timeout: 10_000],
-        receive_timeout: 30_000,
+        receive_timeout: 15_000,
+        # A 10 s connect timeout, and no reuse of a connection that sat
+        # idle: a Wi-Fi link that naps or a NAT that forgets it leaves the
+        # next request hanging. (Req takes either :finch or
+        # :connect_options, not both.)
+        finch: [conn_max_idle_time: 10_000, conn_opts: [transport_opts: [timeout: 10_000]]],
         retry: false
       ]
       |> Keyword.merge(opts)
