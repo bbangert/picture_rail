@@ -28,6 +28,7 @@ defmodule PictureRail.FirmwareGuardTest do
       Keyword.merge(
         [
           name: nil,
+          init_complete: fn -> send(test, :init_complete) end,
           valid?: fn -> false end,
           validate: fn ->
             send(test, {:validated, now()})
@@ -51,9 +52,17 @@ defmodule PictureRail.FirmwareGuardTest do
     assert_receive {:DOWN, ^ref, :process, ^pid, reason} when reason in [:normal, :noproc], 1_000
   end
 
-  test "already-validated firmware is left alone" do
+  # heart reboots the device if nothing completes its init handshake
+  test "already-validated firmware is left alone, but heart's handshake is done" do
     assert {:ok, :undefined} = start_guard(valid?: fn -> true end)
+    assert_received :init_complete
     refute_receive {:validated, _}, 50
+  end
+
+  test "firmware on trial completes heart's handshake straight away" do
+    {:ok, _} = start_guard(viewport: fn -> nil end)
+    assert_received :init_complete
+    refute_received {:validated, _}
   end
 
   test "without a viewport at boot, it validates straight away" do

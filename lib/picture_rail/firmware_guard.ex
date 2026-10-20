@@ -21,11 +21,18 @@ defmodule PictureRail.FirmwareGuard do
   restarted. Enabled with `config :picture_rail, firmware_guard: true` (the
   Nerves targets).
 
-  Options, for tests: `:valid?`, `:validate`, `:reboot` and `:viewport`
-  (functions standing in for `Nerves.Runtime` and `PictureRail.View.whereis/0`),
+  It also completes nerves_heart's init handshake when it starts, which
+  nerves_runtime's startup guard used to do: without it, heart reboots the
+  device 10 minutes after boot.
+
+  Options, for tests: `:init_complete`, `:valid?`, `:validate`, `:reboot` and
+  `:viewport` (functions standing in for `Nerves.Runtime`,
+  `Nerves.Runtime.Heart` and `PictureRail.View.whereis/0`),
   `:view?`, and the `:steady_ms`, `:deadline_ms` and `:poll_ms` timings.
   """
   use GenServer, restart: :transient
+
+  alias Nerves.Runtime.Heart
 
   require Logger
 
@@ -40,6 +47,11 @@ defmodule PictureRail.FirmwareGuard do
 
   @impl GenServer
   def init(opts) do
+    # nerves_heart reboots the device unless the app completes its init
+    # handshake within HEART_INIT_TIMEOUT (rel/vm.args.eex). nerves_runtime's
+    # startup guard did that; this does it now, validated firmware or not.
+    Keyword.get(opts, :init_complete, &Heart.init_complete/0).()
+
     valid? = Keyword.get(opts, :valid?, &Nerves.Runtime.firmware_valid?/0)
 
     if valid?.() do
