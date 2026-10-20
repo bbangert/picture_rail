@@ -110,4 +110,12 @@ defmodule PictureRail.View.PanelTest do
   test "no blocks is one empty page" do
     assert Panel.paginate([], 500) == [[]]
   end
+
+  test "with nothing from Home Assistant yet, the panel says why" do
+    assert Panel.waiting_message(:connecting) == "Loading"
+    assert Panel.waiting_message(:connected) == "Loading"
+    assert Panel.waiting_message(:disconnected) == "Can't reach Home Assistant"
+    assert Panel.waiting_message({:auth_failed, "invalid"}) == "Home Assistant refused the token"
+    assert Panel.waiting_message(:unconfigured) == "Home Assistant isn't set up"
+  end
 end

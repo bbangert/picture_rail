@@ -57,6 +57,17 @@ defmodule PictureRail.View.Panel do
     end
   end
 
+  @doc """
+  What the panel says while it has nothing from Home Assistant yet (no
+  model since boot): loading while connecting or connected, otherwise why
+  nothing will come.
+  """
+  @spec waiting_message(PictureRail.HA.Model.status()) :: String.t()
+  def waiting_message(:disconnected), do: "Can't reach Home Assistant"
+  def waiting_message({:auth_failed, _}), do: "Home Assistant refused the token"
+  def waiting_message(:unconfigured), do: "Home Assistant isn't set up"
+  def waiting_message(_connecting), do: "Loading"
+
   @doc "Whether an entity has a detail view (a chevron on its pill)."
   @spec detail?(String.t()) :: boolean()
   def detail?(entity_id), do: Index.domain(entity_id) in @details
@@ -686,7 +697,9 @@ defmodule PictureRail.View.Panel do
       [hourly, {:row, 300, [EnergyPage.chart(summary, ctx.content_w, 300)], hourly}]
   end
 
-  defp blocks(ctx, _view, slice) when slice in [nil, :loading], do: empty(ctx, "Loading")
+  defp blocks(ctx, _view, slice) when slice in [nil, :loading],
+    do: empty(ctx, waiting_message(ctx.ha.status))
+
   defp blocks(ctx, _view, :gone), do: empty(ctx, "Not in Home Assistant any more")
 
   defp blocks(ctx, :overview, %{floors: floors, other_areas: others, devices?: devices?}) do
