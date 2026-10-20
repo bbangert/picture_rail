@@ -33,6 +33,13 @@ defmodule HomeFrame.Hardware do
   @callback screen_size() :: {pos_integer(), pos_integer()} | nil
 
   @doc """
+  Which way up the display is now, from the device's sensor, or `:unknown`
+  (no sensor, or no reading yet). The UI starts from this, since sensors
+  report only changes.
+  """
+  @callback orientation() :: HomeFrame.Orientation.reading() | :unknown
+
+  @doc """
   The mode of the first connected connector on a DRM card, read from
   sysfs (`/sys/class/drm/<card>-*/modes`), or `nil`.
   """

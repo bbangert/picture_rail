@@ -43,6 +43,19 @@ defmodule HomeFrame.App.OrientationTest do
            }
   end
 
+  test "a (re)started controller starts from the sensor's current reading" do
+    assert %{current: :portrait_x_pos} =
+             Orientation.init(%{default: :landscape, reading: :portrait_x_pos}, %{})
+
+    # no reading yet, or lying flat: the default
+    assert %{current: :landscape} =
+             Orientation.init(%{default: :landscape, reading: :unknown}, %{})
+
+    assert %{current: :landscape} = Orientation.init(%{default: :landscape, reading: :flat}, %{})
+    # on the host the hardware has no sensor
+    assert %{current: :landscape} = Orientation.init(%{default: :landscape}, %{})
+  end
+
   test "flat readings keep the last orientation" do
     state = Orientation.reading(:flat, init())
     refute_receive {:settle, _}

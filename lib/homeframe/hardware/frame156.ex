@@ -18,6 +18,12 @@ defmodule HomeFrame.Hardware.Frame156 do
   @impl HomeFrame.Hardware
   def screen_size, do: HomeFrame.Hardware.drm_screen_size("card0")
 
+  # The accelerometer starts before the app and never calls into it.
+  @impl HomeFrame.Hardware
+  def orientation do
+    if Process.whereis(Accelerometer), do: Accelerometer.get(), else: :unknown
+  end
+
   @impl HomeFrame.Hardware
   def emerge_config do
     [
