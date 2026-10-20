@@ -17,6 +17,14 @@ defmodule HomeFrame.Immich.Cache do
   start (present, non-empty, a JPEG or PNG header); anything else in the
   directory is removed.
 
+  Every Immich request (connecting, listing albums and photos, downloads)
+  runs in a task, so the process only ever does in-memory work and `next/1`
+  and `stats/1` answer at once even while Immich hangs. One request and
+  one download run at a time. Each carries the configuration generation it
+  was started under: a result from before a settings change is dropped
+  (a download's files deleted), so a deselected album can't slip in.
+  Timers carry a token, so a stale one is ignored.
+
   Status (reported to the `:immich` controller): `:unconfigured`,
   `:connecting`, `:online`, `:offline`, `:invalid_key`,
   `{:missing_permission, message}` or `:no_albums`.
@@ -57,7 +65,7 @@ defmodule HomeFrame.Immich.Cache do
 
   @doc """
   The next photo to show: `{:ok, entry}` or `:none` while nothing is
-  downloaded yet. Never waits on the network.
+  downloaded yet. Never waits on the network (requests run in tasks).
   """
   @spec next(GenServer.server()) :: {:ok, entry()} | :none
   def next(server \\ __MODULE__), do: GenServer.call(server, :next)
@@ -92,6 +100,10 @@ defmodule HomeFrame.Immich.Cache do
       ready: :queue.new(),
       current: nil,
       download: nil,
+      # the Immich request in flight: {task ref, kind, generation}
+      op: nil,
+      # bumped when the server or albums change; tags requests and downloads
+      gen: 0,
       backoff_ms: opts[:backoff_initial_ms],
       timer: nil,
       app_monitor: nil,
@@ -124,15 +136,34 @@ defmodule HomeFrame.Immich.Cache do
   def handle_call(:stats, _from, state), do: {:reply, stats_of(state), state}
 
   @impl GenServer
-  def handle_info(:connect, state), do: {:noreply, connect(%{state | timer: nil})}
-  def handle_info(:poll_albums, state), do: {:noreply, poll_albums(%{state | timer: nil})}
+  # Timers carry the token they were armed with; a stale one is ignored.
+  def handle_info({:connect, token}, %{timer: {_ref, token}} = state),
+    do: {:noreply, connect(%{state | timer: nil})}
 
-  def handle_info({ref, result}, %{download: {ref, asset}} = state) do
+  def handle_info({:poll_albums, token}, %{timer: {_ref, token}} = state),
+    do: {:noreply, poll_albums(%{state | timer: nil})}
+
+  # By hand (the IEx shell, tests): poll now.
+  def handle_info(:poll_albums, state), do: {:noreply, poll_albums(cancel_timer(state))}
+
+  def handle_info({ref, result}, %{op: {ref, kind, gen}} = state) do
     Process.demonitor(ref, [:flush])
-    {:noreply, download_done(result, asset, %{state | download: nil})}
+    state = %{state | op: nil}
+    {:noreply, if(gen == state.gen, do: op_done(kind, result, state), else: state)}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %{download: {ref, asset}} = state) do
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{op: {ref, kind, gen}} = state) do
+    Logger.warning("Immich cache: #{inspect(kind)} crashed: #{inspect(reason)}")
+    state = %{state | op: nil}
+    {:noreply, if(gen == state.gen, do: failed(state, :offline), else: state)}
+  end
+
+  def handle_info({ref, result}, %{download: {ref, asset, gen}} = state) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, download_done(result, asset, gen, %{state | download: nil})}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{download: {ref, asset, _gen}} = state) do
     Logger.warning("Immich cache: download of #{asset.id} crashed: #{inspect(reason)}")
     {:noreply, %{state | download: nil} |> maybe_download()}
   end
@@ -181,7 +212,13 @@ defmodule HomeFrame.Immich.Cache do
         Logger.info("Immich cache: Immich isn't configured")
 
         cancel_timer(state)
-        |> Map.merge(%{immich: nil, conn: nil, window: window, include_live?: include_live?})
+        |> Map.merge(%{
+          immich: nil,
+          conn: nil,
+          gen: state.gen + 1,
+          window: window,
+          include_live?: include_live?
+        })
         |> set_status(:unconfigured)
 
       true ->
@@ -189,6 +226,7 @@ defmodule HomeFrame.Immich.Cache do
         |> cancel_timer()
         |> Map.merge(%{
           immich: settings.immich,
+          gen: state.gen + 1,
           conn: Map.get_lazy(state.opts, :conn, fn -> state.api.connect(settings.immich) end),
           window: window,
           include_live?: include_live?,
@@ -202,31 +240,58 @@ defmodule HomeFrame.Immich.Cache do
 
   # -- Connecting and listing --
 
-  defp connect(%{conn: nil} = state), do: state
+  defp connect(state), do: start_op(state, :connect, [])
+  defp poll_albums(state), do: start_op(state, :poll, [])
 
-  defp connect(state) do
-    with :ok <- call(state, :ping, []),
-         {:ok, version} <- call(state, :version, []),
-         {:ok, albums} <- call(state, :list_albums, []) do
-      %{state | version: version, backoff_ms: state.opts.backoff_initial_ms}
-      |> refresh_index(albums)
-      |> maybe_download()
-      |> schedule(:poll_albums, state.opts.album_poll_ms)
-    else
-      {:error, reason} -> failed(state, reason)
-    end
+  # One Immich request at a time, in a task. A request from an older
+  # generation still running doesn't hold up one for the current settings
+  # (its result is dropped when it arrives).
+  defp start_op(%{conn: nil} = state, _kind, _args), do: state
+  defp start_op(%{op: {_ref, _kind, gen}} = state, _kind2, _args) when gen == state.gen, do: state
+
+  defp start_op(state, kind, args) do
+    {api, conn} = {state.api, state.conn}
+
+    task =
+      Task.Supervisor.async_nolink(state.opts.task_sup, fn -> request(api, conn, kind, args) end)
+
+    %{state | op: {task.ref, kind, state.gen}}
   end
 
-  defp poll_albums(%{conn: nil} = state), do: state
+  # Runs in the task.
+  defp request(api, conn, :connect, []) do
+    with :ok <- call(api, conn, :ping, []),
+         {:ok, version} <- call(api, conn, :version, []),
+         {:ok, albums} <- call(api, conn, :list_albums, []),
+         do: {:ok, {version, albums}}
+  end
 
-  defp poll_albums(state) do
-    case call(state, :list_albums, []) do
-      {:ok, albums} ->
-        state |> refresh_index(albums) |> schedule(:poll_albums, state.opts.album_poll_ms)
+  defp request(api, conn, :poll, []), do: call(api, conn, :list_albums, [])
 
-      {:error, reason} ->
-        failed(state, reason)
-    end
+  defp request(api, conn, :list, [album_ids, version]),
+    do: call(api, conn, :list_album_images, [album_ids, version])
+
+  defp op_done(_kind, {:error, reason}, state), do: failed(state, reason)
+
+  defp op_done(:connect, {:ok, {version, albums}}, state) do
+    %{state | version: version, backoff_ms: state.opts.backoff_initial_ms}
+    |> refresh_index(albums)
+    |> maybe_download()
+    |> schedule(:poll_albums, state.opts.album_poll_ms)
+  end
+
+  defp op_done(:poll, {:ok, albums}, state),
+    do: state |> refresh_index(albums) |> schedule(:poll_albums, state.opts.album_poll_ms)
+
+  defp op_done({:list, album_ids, versions}, {:ok, assets}, state) do
+    Logger.info("Immich cache: #{length(assets)} photos in #{length(album_ids)} album(s)")
+
+    %{state | index: assets, album_ids: album_ids, album_versions: versions, pass: []}
+    |> drop_removed()
+    |> set_status(:online)
+    |> maybe_download()
+    # the photo count changed
+    |> report()
   end
 
   # Re-list the photos only when a selected album's change fields moved.
@@ -251,19 +316,17 @@ defmodule HomeFrame.Immich.Cache do
     Enum.filter(albums, &(&1.id in immich.album_ids or &1.name in immich.album_names))
   end
 
+  defp list_images(%{conn: nil} = state, _album_ids, _versions), do: state
+
   defp list_images(state, album_ids, versions) do
-    case call(state, :list_album_images, [album_ids, state.version]) do
-      {:ok, assets} ->
-        Logger.info("Immich cache: #{length(assets)} photos in #{length(album_ids)} album(s)")
+    {api, conn, version} = {state.api, state.conn, state.version}
 
-        %{state | index: assets, album_ids: album_ids, album_versions: versions, pass: []}
-        |> drop_removed()
-        |> set_status(:online)
-        |> maybe_download()
+    task =
+      Task.Supervisor.async_nolink(state.opts.task_sup, fn ->
+        request(api, conn, :list, [album_ids, version])
+      end)
 
-      {:error, reason} ->
-        failed(state, reason)
-    end
+    %{state | op: {task.ref, {:list, album_ids, versions}, state.gen}}
   end
 
   defp failed(state, reason) do
@@ -285,8 +348,8 @@ defmodule HomeFrame.Immich.Cache do
   # The Immich side is outside our control: an exception there (a bug, an
   # unexpected response) is logged and treated like being offline, so it
   # can't take the app down with it.
-  defp call(state, function, args) do
-    apply(state.api, function, [state.conn | args])
+  defp call(api, conn, function, args) do
+    apply(api, function, [conn | args])
   rescue
     exception ->
       Logger.error(
@@ -316,12 +379,18 @@ defmodule HomeFrame.Immich.Cache do
     if extra == [], do: state, else: write_manifest(%{state | ready: :queue.from_list(keep)})
   end
 
-  # The photo that was on screen (no longer current): deleted if the
-  # window can refill with new photos, otherwise sent round again.
+  # The photo that was on screen (no longer current): deleted if it left
+  # the albums while it was shown (once they've been listed: offline, the
+  # restored window keeps cycling) or if the window can refill with new
+  # photos; otherwise sent round again.
   defp retire(nil, state), do: state
 
   defp retire(old, state) do
-    if can_refill?(%{state | ready: :queue.in(old, state.ready)}) do
+    removed? =
+      state.album_versions != %{} and
+        not Enum.any?(state.index, &(key(&1) == key(old.asset)))
+
+    if removed? or can_refill?(%{state | ready: :queue.in(old, state.ready)}) do
       delete_entry(old)
       state
     else
@@ -387,7 +456,7 @@ defmodule HomeFrame.Immich.Cache do
         fetch(api, conn, asset, path, clip)
       end)
 
-    %{state | download: {task.ref, asset}}
+    %{state | download: {task.ref, asset, state.gen}}
   end
 
   # Runs in a task: download to .part files, then rename.
@@ -425,6 +494,15 @@ defmodule HomeFrame.Immich.Cache do
     end
   end
 
+  # A download started under replaced settings: its photo may be from an
+  # album no longer shown, so it's thrown away.
+  defp download_done(result, _asset, gen, %{gen: current} = state) when gen != current do
+    with {:ok, entry} <- result, do: delete_entry(entry)
+    maybe_download(state)
+  end
+
+  defp download_done(result, asset, _gen, state), do: download_done(result, asset, state)
+
   defp download_done({:ok, entry}, _asset, state) do
     entry = if entry.clip && File.exists?(entry.clip), do: entry, else: %{entry | clip: nil}
 
@@ -436,12 +514,12 @@ defmodule HomeFrame.Immich.Cache do
 
   defp download_done({:error, {:unsupported_format, type}}, asset, state) do
     Logger.warning("Immich cache: skipping #{asset.id}, its preview is #{type}")
-    %{state | bad: MapSet.put(state.bad, key(asset))} |> maybe_download()
+    %{state | bad: MapSet.put(state.bad, key(asset))} |> maybe_download() |> report()
   end
 
   defp download_done({:error, {:http_error, status}}, asset, state) do
     Logger.warning("Immich cache: skipping #{asset.id} (HTTP #{status})")
-    %{state | bad: MapSet.put(state.bad, key(asset))} |> maybe_download()
+    %{state | bad: MapSet.put(state.bad, key(asset))} |> maybe_download() |> report()
   end
 
   # A download that stalled or timed out doesn't mean Immich is down (the
@@ -573,13 +651,14 @@ defmodule HomeFrame.Immich.Cache do
 
   defp schedule(state, message, ms) do
     state = cancel_timer(state)
-    %{state | timer: Process.send_after(self(), message, ms)}
+    token = make_ref()
+    %{state | timer: {Process.send_after(self(), {message, token}, ms), token}}
   end
 
   defp cancel_timer(%{timer: nil} = state), do: state
 
-  defp cancel_timer(state) do
-    Process.cancel_timer(state.timer)
+  defp cancel_timer(%{timer: {ref, _token}} = state) do
+    Process.cancel_timer(ref)
     %{state | timer: nil}
   end
 

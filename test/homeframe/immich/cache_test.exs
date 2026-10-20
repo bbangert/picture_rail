@@ -32,8 +32,44 @@ defmodule HomeFrame.Immich.CacheTest do
     defp call(agent, name, fun) do
       Agent.get_and_update(agent, fn s ->
         s = %{s | calls: [name | s.calls]}
+        if pid = Map.get(s, :notify), do: send(pid, {:fake_call, name})
         if s.fail, do: {{:error, s.fail}, s}, else: {fun.(s), s}
       end)
+    end
+
+    # A gate stands in for a server that doesn't answer: `wait/1` blocks
+    # until the test calls `release/1` (before or after), and the test is
+    # told `:gate_waiting` when a caller is held.
+    def gate do
+      test = self()
+      spawn_link(fn -> gate_loop(test, []) end)
+    end
+
+    def release(gate), do: send(gate, :release)
+
+    defp gate_loop(test, waiting) do
+      receive do
+        {:wait, pid} ->
+          send(test, :gate_waiting)
+          gate_loop(test, [pid | waiting])
+
+        :release ->
+          Enum.each(waiting, &send(&1, :go))
+          gate_open()
+      end
+    end
+
+    defp gate_open do
+      receive do
+        {:wait, pid} ->
+          send(pid, :go)
+          gate_open()
+      end
+    end
+
+    defp wait(gate) do
+      send(gate, {:wait, self()})
+      receive(do: (:go -> :ok))
     end
 
     @impl true
@@ -41,6 +77,14 @@ defmodule HomeFrame.Immich.CacheTest do
     @impl true
     def ping(agent) do
       if Agent.get(agent, &Map.get(&1, :raise)), do: raise("boom")
+
+      # A gate: an agent that answers only once the test sends it :release,
+      # standing in for a server that doesn't answer.
+      case Agent.get(agent, &Map.get(&1, :gate)) do
+        nil -> :ok
+        gate -> wait(gate)
+      end
+
       call(agent, :ping, fn _ -> :ok end)
     end
 
@@ -93,16 +137,17 @@ defmodule HomeFrame.Immich.CacheTest do
     {pid, opts[:name]}
   end
 
-  defp wait_ready(cache, n),
-    do: wait(fn -> Cache.stats(cache).ready >= n and not Cache.stats(cache).downloading? end)
-
-  defp wait(fun, tries \\ 200) do
-    cond do
-      fun.() -> :ok
-      tries == 0 -> flunk("timed out")
-      true -> Process.sleep(10) && wait(fun, tries - 1)
+  # The cache reports every change of its stats (`notify`): wait for one
+  # that matches.
+  defp await_stats(fun, timeout \\ 2_000) do
+    receive do
+      {:stats, stats} -> if fun.(stats), do: stats, else: await_stats(fun, timeout)
+    after
+      timeout -> flunk("no matching stats")
     end
   end
+
+  defp wait_ready(n), do: await_stats(&(&1.ready >= n and not &1.downloading?))
 
   defp jpgs(dir), do: dir |> Path.join("*.jpg") |> Path.wildcard() |> length()
 
@@ -110,37 +155,70 @@ defmodule HomeFrame.Immich.CacheTest do
     agent = Fake.start(Enum.map(1..6, &asset/1))
     {_pid, cache} = start_cache(agent, dir)
 
-    wait_ready(cache, 3)
+    wait_ready(3)
     assert %{status: :online, photos: 6, ready: 3, window: 3} = Cache.stats(cache)
     assert jpgs(dir) == 3
 
     {:ok, first} = Cache.next(cache)
     assert File.exists?(first.path)
-    wait_ready(cache, 3)
+    wait_ready(3)
     assert jpgs(dir) == 4
 
     # Showing the next one deletes the first and fetches another.
     {:ok, second} = Cache.next(cache)
     assert second.asset != first.asset
-    wait_ready(cache, 3)
+    wait_ready(3)
     refute File.exists?(first.path)
     assert jpgs(dir) == 4
   end
 
-  test "next never waits: :none until a photo is downloaded", %{tmp_dir: dir} do
-    agent = Fake.start([asset(1)], fail: :offline)
+  test "next and stats answer while Immich hangs", %{tmp_dir: dir} do
+    gate = Fake.gate()
+    agent = Fake.start([asset(1)])
+    Fake.set(agent, &Map.put(&1, :gate, gate))
     {_pid, cache} = start_cache(agent, dir)
-    assert Cache.next(cache) == :none
+
+    # the connect is stuck in ping; the cache still answers at once
+    {micros, :none} = :timer.tc(fn -> Cache.next(cache) end)
+    assert micros < 100_000
+    assert %{status: :connecting} = Cache.stats(cache)
+
+    Fake.release(gate)
+    assert_receive {:stats, %{ready: 1, downloading?: false}}, 1_000
+  end
+
+  test "a request started before a settings change is dropped", %{tmp_dir: dir} do
+    gate = Fake.gate()
+    agent = Fake.start([asset(1)])
+    test = self()
+    Fake.set(agent, &Map.merge(&1, %{gate: gate, notify: test}))
+    {pid, _cache} = start_cache(agent, dir)
+
+    # The first connect hangs. The settings change (a new generation), and
+    # the second connect starts without waiting for the first.
+    assert_receive :gate_waiting
+    Fake.set(agent, &Map.put(&1, :gate, nil))
+    :sys.replace_state(pid, &%{&1 | immich: nil})
+    send(pid, %Solve.Message{type: :update, payload: %{}})
+    assert_receive {:stats, %{status: :online, ready: 1, downloading?: false}}, 1_000
+    assert_received {:fake_call, :list_images}
+
+    # The album changes; then the stale connect finishes and sees it. Applied,
+    # it would re-list the album; dropped, nothing happens.
+    Fake.set(agent, &%{&1 | album: %{&1.album | updated_at: "t9"}})
+    Fake.release(gate)
+    assert_receive {:fake_call, :list_albums}, 1_000
+    refute_receive {:fake_call, :list_images}, 200
   end
 
   test "offline, the photos on disk keep cycling", %{tmp_dir: dir} do
     agent = Fake.start(Enum.map(1..3, &asset/1))
     {pid, cache} = start_cache(agent, dir)
-    wait_ready(cache, 3)
+    wait_ready(3)
 
     Fake.set(agent, &%{&1 | fail: :offline})
     send(pid, :poll_albums)
-    wait(fn -> Cache.stats(cache).status == :offline end)
+    await_stats(&(&1.status == :offline))
 
     shown = for _ <- 1..7, do: elem(Cache.next(cache), 1).asset.id
     assert Enum.uniq(shown) |> length() == 3
@@ -151,7 +229,7 @@ defmodule HomeFrame.Immich.CacheTest do
   test "an album that fits in the window cycles without re-downloading", %{tmp_dir: dir} do
     agent = Fake.start(Enum.map(1..2, &asset/1))
     {_pid, cache} = start_cache(agent, dir, window: 5)
-    wait_ready(cache, 2)
+    wait_ready(2)
 
     for _ <- 1..6, do: {:ok, _} = Cache.next(cache)
     assert Fake.calls(agent, :download) == 2
@@ -160,7 +238,7 @@ defmodule HomeFrame.Immich.CacheTest do
   test "the manifest brings the window back after a restart without network", %{tmp_dir: dir} do
     agent = Fake.start(Enum.map(1..4, &asset/1))
     {pid, cache} = start_cache(agent, dir)
-    wait_ready(cache, 3)
+    wait_ready(3)
     stop_supervised!(cache)
     refute Process.alive?(pid)
 
@@ -171,7 +249,9 @@ defmodule HomeFrame.Immich.CacheTest do
 
     offline = Fake.start([], fail: :offline)
     {_pid, cache} = start_cache(offline, dir)
-    assert %{status: :offline, ready: 2} = Cache.stats(cache)
+    # the window is back before Immich has answered
+    assert %{ready: 2} = Cache.stats(cache)
+    assert_receive {:stats, %{status: :offline}}, 1_000
     refute File.exists?(broken)
     refute File.exists?(Path.join(dir, "stray.part"))
     assert {:ok, %{path: path}} = Cache.next(cache)
@@ -180,17 +260,43 @@ defmodule HomeFrame.Immich.CacheTest do
 
   test "albums are re-listed only when they change; removed photos go", %{tmp_dir: dir} do
     agent = Fake.start(Enum.map(1..3, &asset/1))
-    {_pid, cache} = start_cache(agent, dir, album_poll_ms: 20)
-    wait_ready(cache, 3)
-    wait(fn -> Fake.calls(agent, :list_albums) >= 3 end)
+    test = self()
+    Fake.set(agent, &Map.put(&1, :notify, test))
+    {_pid, _cache} = start_cache(agent, dir, album_poll_ms: 20)
+    wait_ready(3)
+    for _ <- 1..3, do: assert_receive({:fake_call, :list_albums}, 1_000)
     assert Fake.calls(agent, :list_images) == 1
 
     Fake.set(agent, fn s ->
       %{s | assets: [asset(1), asset(2)], album: %{s.album | asset_count: 2, updated_at: "t1"}}
     end)
 
-    wait(fn -> Fake.calls(agent, :list_images) == 2 and Cache.stats(cache).photos == 2 end)
-    wait(fn -> jpgs(dir) == 2 end)
+    await_stats(&(&1.photos == 2))
+    assert Fake.calls(agent, :list_images) == 2
+    assert jpgs(dir) == 2
+  end
+
+  test "a photo removed from the album while on screen doesn't come round again",
+       %{tmp_dir: dir} do
+    # the album fits in the window, so shown photos are re-queued
+    agent = Fake.start(Enum.map(1..2, &asset/1))
+    {pid, cache} = start_cache(agent, dir, window: 5)
+    wait_ready(2)
+
+    {:ok, shown} = Cache.next(cache)
+    gone = shown.asset.id
+
+    # it leaves the album while on screen; the re-list can't drop it yet
+    Fake.set(agent, fn s ->
+      %{s | assets: Enum.reject(s.assets, &(&1.id == gone)), album: %{s.album | updated_at: "t1"}}
+    end)
+
+    send(pid, :poll_albums)
+    await_stats(&(&1.photos == 1))
+
+    ids = for _ <- 1..4, do: elem(Cache.next(cache), 1).asset.id
+    refute gone in ids
+    refute File.exists?(shown.path)
   end
 
   test "a preview in an unsupported format is skipped", %{tmp_dir: dir} do
@@ -200,7 +306,7 @@ defmodule HomeFrame.Immich.CacheTest do
       )
 
     {_pid, cache} = start_cache(agent, dir)
-    wait_ready(cache, 2)
+    wait_ready(2)
     assert Cache.stats(cache).ready == 2
     ids = for _ <- 1..2, do: elem(Cache.next(cache), 1).asset.id
     refute "p2" in ids
@@ -210,7 +316,7 @@ defmodule HomeFrame.Immich.CacheTest do
     agent = Fake.start(Enum.map(1..3, &asset/1), formats: %{"p2" => {:error, :offline}})
     {_pid, cache} = start_cache(agent, dir)
 
-    wait(fn -> Cache.stats(cache).ready >= 2 end)
+    await_stats(&(&1.ready >= 2))
     assert Cache.stats(cache).status == :online
     refute_received {:stats, %{status: :offline}}
   end
@@ -218,12 +324,12 @@ defmodule HomeFrame.Immich.CacheTest do
   test "an exception from the Immich side counts as offline, not a crash", %{tmp_dir: dir} do
     agent = Fake.start([asset(1)])
     Fake.set(agent, &Map.put(&1, :raise, true))
-    {pid, cache} = start_cache(agent, dir)
+    {pid, _cache} = start_cache(agent, dir)
 
     assert_receive {:stats, %{status: :offline}}, 1_000
     assert Process.alive?(pid)
     Fake.set(agent, &Map.put(&1, :raise, false))
-    wait(fn -> Cache.stats(cache).ready == 1 end)
+    await_stats(&(&1.ready == 1))
   end
 
   test "a revoked key is reported", %{tmp_dir: dir} do
