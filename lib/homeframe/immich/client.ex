@@ -18,6 +18,8 @@ defmodule HomeFrame.Immich.Client do
   alias HomeFrame.Immich.{Album, Asset}
   alias HomeFrame.Settings
 
+  @behaviour HomeFrame.Immich.Api
+
   @derive {Inspect, except: [:req]}
   @enforce_keys [:req]
   defstruct [:req]
@@ -52,14 +54,20 @@ defmodule HomeFrame.Immich.Client do
     %__MODULE__{req: req}
   end
 
+  @doc false
+  @impl HomeFrame.Immich.Api
+  def connect(settings), do: new(settings)
+
   @doc "Whether the server answers (needs no key)."
   @spec ping(t()) :: :ok | {:error, error()}
+  @impl HomeFrame.Immich.Api
   def ping(client) do
     with {:ok, %{"res" => "pong"}} <- request(client, :get, "/server/ping"), do: :ok
   end
 
   @doc "The server's version, `{major, minor, patch}`."
   @spec version(t()) :: {:ok, {integer(), integer(), integer()}} | {:error, error()}
+  @impl HomeFrame.Immich.Api
   def version(client) do
     with {:ok, %{"major" => major, "minor" => minor, "patch" => patch}} <-
            request(client, :get, "/server/version"),
@@ -68,6 +76,7 @@ defmodule HomeFrame.Immich.Client do
 
   @doc "All albums the key's user owns or that are shared with them."
   @spec list_albums(t()) :: {:ok, [Album.t()]} | {:error, error()}
+  @impl HomeFrame.Immich.Api
   def list_albums(client) do
     with {:ok, albums} when is_list(albums) <- request(client, :get, "/albums") do
       {:ok, albums |> Enum.map(&Album.from_api/1) |> Enum.reject(&is_nil/1)}
@@ -81,6 +90,7 @@ defmodule HomeFrame.Immich.Client do
   """
   @spec list_album_images(t(), [String.t()], {integer(), integer(), integer()}) ::
           {:ok, [Asset.t()]} | {:error, error()}
+  @impl HomeFrame.Immich.Api
   def list_album_images(client, album_ids, version) do
     if version >= {3, 2, 0},
       do: fetch_cursor_pages(client, album_ids, nil, []),
@@ -146,6 +156,7 @@ defmodule HomeFrame.Immich.Client do
   to `path`. Anything but JPEG or PNG is refused, and `path` removed.
   """
   @spec download_preview(t(), String.t(), Path.t()) :: :ok | {:error, error()}
+  @impl HomeFrame.Immich.Api
   def download_preview(client, asset_id, path) do
     case download(client, "/assets/#{asset_id}/thumbnail", path, params: [size: "preview"]) do
       {:ok, type} when type in ["image/jpeg", "image/png"] ->
@@ -162,6 +173,7 @@ defmodule HomeFrame.Immich.Client do
 
   @doc "Download a Live Photo's motion clip (its `live_photo_video_id`) to `path`."
   @spec download_clip(t(), String.t(), Path.t()) :: :ok | {:error, error()}
+  @impl HomeFrame.Immich.Api
   def download_clip(client, video_id, path) do
     with {:ok, _type} <- download(client, "/assets/#{video_id}/video/playback", path, []), do: :ok
   end

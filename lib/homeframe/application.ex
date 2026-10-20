@@ -10,7 +10,8 @@ defmodule HomeFrame.Application do
         [
           {Task.Supervisor, name: HomeFrame.TaskSup},
           HomeFrame.Settings.Watcher,
-          {HomeFrame.App, name: HomeFrame.App}
+          {HomeFrame.App, name: HomeFrame.App},
+          HomeFrame.Immich.Cache
         ] ++ view()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: HomeFrame.Supervisor)
