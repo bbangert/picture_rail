@@ -86,7 +86,11 @@ this project (the path is git-ignored):
   rootfs_overlay/lib/firmware/silead/gsl3676.fw
 ```
 
-See the system's README for taking the backup.
+The backup has to be taken while the frame still runs Android: installing
+Nerves overwrites the stock kernel. The system README's
+[Touchscreen](https://github.com/bbangert/nerves_system_rk3326_frame156#touchscreen)
+section has every step, from the backup to checking `silead_ts` on the
+frame.
 
 ### Installing
 
