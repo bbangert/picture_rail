@@ -16,6 +16,7 @@ defmodule HomeFrame.MixProject do
       archives: [nerves_bootstrap: "~> 1.17"],
       listeners: listeners(Mix.target(), Mix.env()),
       start_permanent: Mix.env() == :prod,
+      elixirc_paths: elixirc_paths(Mix.env()),
       # One deps directory per target: Emerge downloads its NIF into its
       # priv/, which the host and the device would otherwise share.
       deps_path: "deps/#{Mix.target()}",
@@ -23,6 +24,9 @@ defmodule HomeFrame.MixProject do
       releases: [{@app, release()}]
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_env), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
   def application do
