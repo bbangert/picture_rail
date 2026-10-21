@@ -11,6 +11,7 @@ defmodule PictureRail.View.SetupPage do
   which hands it to the `:setup` controller.
   """
   use Emerge.UI
+  use Solve.Lookup, :helpers
 
   alias PictureRail.{PhotoSource, Setup}
   alias PictureRail.Setup.{Field, Secret}
@@ -391,7 +392,7 @@ defmodule PictureRail.View.SetupPage do
           fill: choice_fill(color, usable?),
           height: 96,
           width: px(w),
-          attrs: if(usable?, do: [Event.on_press({:setup, :wifi_pick, n})], else: [])
+          attrs: if(usable?, do: [Event.on_press(event(ctx.setup, :wifi_pick, n))], else: [])
         )
       end
 
@@ -402,7 +403,7 @@ defmodule PictureRail.View.SetupPage do
         color: Theme.hex(:lilac),
         height: 96,
         width: px(w),
-        attrs: if(joining?, do: [], else: [Event.on_press({:setup, :wifi_other, nil})])
+        attrs: if(joining?, do: [], else: [Event.on_press(event(ctx.setup, :wifi_other))])
       )
 
     rows =
@@ -423,7 +424,7 @@ defmodule PictureRail.View.SetupPage do
         fill: Theme.color(if(busy?, do: Theme.dim(Theme.hex(:orange)), else: Theme.hex(:orange))),
         height: 72,
         width: px(@control_w),
-        attrs: if(busy?, do: [], else: [Event.on_press({:setup, :join, nil})])
+        attrs: if(busy?, do: [], else: [Event.on_press(event(setup, :join))])
       )
 
     back =
@@ -432,7 +433,7 @@ defmodule PictureRail.View.SetupPage do
         color: Theme.hex(:mauve),
         height: 72,
         width: px(@control_w),
-        attrs: [Event.on_press({:setup, :wifi_list, nil})]
+        attrs: [Event.on_press(event(setup, :wifi_list))]
       )
 
     message =
@@ -462,7 +463,7 @@ defmodule PictureRail.View.SetupPage do
               fill: choice_fill(color, module == current),
               height: @choice_h,
               width: px(column_w(ctx, per_row)),
-              attrs: [Event.on_press({:setup, :set_type, module.type()})]
+              attrs: [Event.on_press(event(ctx.setup, :set_type, module.type()))]
             )
           end
 
@@ -473,22 +474,22 @@ defmodule PictureRail.View.SetupPage do
 
   defp source_picker(_ctx, _setup, _color), do: []
 
-  defp field_blocks(_ctx, {:toggle, id, label, on?, error}, color) do
+  defp field_blocks(ctx, {:toggle, id, label, on?, error}, color) do
     control =
       LCARS.pill(
         label: if(on?, do: "ON", else: "OFF"),
         fill: choice_fill(color, on?),
         height: 64,
         width: px(@control_w),
-        attrs: [Event.on_press({:setup, :toggle, id})]
+        attrs: [Event.on_press(event(ctx.setup, :toggle, id))]
       )
 
     [field_row_block(label, [control], error)]
   end
 
-  defp field_blocks(_ctx, {:stepper, id, label, shown, down?, up?, error}, color) do
+  defp field_blocks(ctx, {:stepper, id, label, shown, down?, up?, error}, color) do
     controls = [
-      step_pill("−", {:setup, :step, {id, -1}}, down?, color),
+      step_pill("−", event(ctx.setup, :step, {id, -1}), down?, color),
       el(
         [
           width(px(170)),
@@ -498,13 +499,13 @@ defmodule PictureRail.View.SetupPage do
         ],
         el([center_x()], text(shown))
       ),
-      step_pill("+", {:setup, :step, {id, 1}}, up?, color)
+      step_pill("+", event(ctx.setup, :step, {id, 1}), up?, color)
     ]
 
     [field_row_block(label, controls, error)]
   end
 
-  defp field_blocks(_ctx, {:text, id, label, shown, _set?, error}, color) do
+  defp field_blocks(ctx, {:text, id, label, shown, _set?, error}, color) do
     value =
       el(
         [
@@ -522,7 +523,7 @@ defmodule PictureRail.View.SetupPage do
         color: color,
         height: 64,
         width: px(@control_w),
-        attrs: [Event.on_press({:setup, :edit, id})]
+        attrs: [Event.on_press(event(ctx.setup, :edit, id))]
       )
 
     [field_row_block(label, [value, edit], error)]
@@ -534,14 +535,14 @@ defmodule PictureRail.View.SetupPage do
 
     rows =
       choices
-      |> choice_pills(id, selected, color, column_w(ctx, per_row))
+      |> choice_pills(ctx.setup, id, selected, color, column_w(ctx, per_row))
       |> Enum.chunk_every(per_row)
       |> Enum.map(&{:row, @choice_h, &1, heading})
 
     status =
       field_row_block(
         choices_status(choices, selected),
-        [reload_pill(id, choices, color)],
+        [reload_pill(ctx.setup, id, choices, color)],
         error,
         :sky
       )
@@ -549,26 +550,26 @@ defmodule PictureRail.View.SetupPage do
     [heading] ++ rows ++ [status]
   end
 
-  defp choice_pills({:ok, list}, id, selected, color, w) do
+  defp choice_pills({:ok, list}, setup, id, selected, color, w) do
     for {value, label} <- list do
       LCARS.pill(
         label: LCARS.fit(label, 30),
         fill: choice_fill(color, value in selected),
         height: @choice_h,
         width: px(w),
-        attrs: [Event.on_press({:setup, :toggle_choice, {id, value}})]
+        attrs: [Event.on_press(event(setup, :toggle_choice, {id, value}))]
       )
     end
   end
 
-  defp choice_pills(_choices, _id, _selected, _color, _w), do: []
+  defp choice_pills(_choices, _setup, _id, _selected, _color, _w), do: []
 
   defp choices_status(:loading, _selected), do: "Loading..."
   defp choices_status({:error, message}, _selected), do: message
   defp choices_status({:ok, []}, _selected), do: "Nothing to choose from"
   defp choices_status(_choices, selected), do: "#{length(selected)} selected"
 
-  defp reload_pill(_id, :loading, color),
+  defp reload_pill(_setup, _id, :loading, color),
     do:
       LCARS.pill(
         label: "LOAD",
@@ -577,13 +578,13 @@ defmodule PictureRail.View.SetupPage do
         width: px(@control_w)
       )
 
-  defp reload_pill(id, choices, color) do
+  defp reload_pill(setup, id, choices, color) do
     LCARS.pill(
       label: if(match?({:ok, _}, choices), do: "RELOAD", else: "LOAD"),
       fill: Theme.color(color),
       height: 64,
       width: px(@control_w),
-      attrs: [Event.on_press({:setup, :load_choices, id})]
+      attrs: [Event.on_press(event(setup, :load_choices, id))]
     )
   end
 
@@ -599,7 +600,7 @@ defmodule PictureRail.View.SetupPage do
           ),
         height: 72,
         width: px(@control_w),
-        attrs: if(setup.saving?, do: [], else: [Event.on_press({:setup, :save, nil})])
+        attrs: if(setup.saving?, do: [], else: [Event.on_press(event(setup, :save))])
       )
 
     test =
@@ -610,7 +611,7 @@ defmodule PictureRail.View.SetupPage do
             color: Theme.hex(:bluey),
             height: 72,
             width: px(@control_w),
-            attrs: [Event.on_press({:setup, :test, nil})]
+            attrs: [Event.on_press(event(setup, :test))]
           )
         ]
       else
@@ -623,7 +624,7 @@ defmodule PictureRail.View.SetupPage do
         color: Theme.hex(:mauve),
         height: 72,
         width: px(@control_w),
-        attrs: [Event.on_press({:setup, :discard, nil})]
+        attrs: [Event.on_press(event(setup, :discard))]
       )
 
     [heading, {:row, 72, [save] ++ test ++ [discard], heading}] ++ status_blocks(setup)
@@ -682,7 +683,8 @@ defmodule PictureRail.View.SetupPage do
             if(setup.reveal?, do: "HIDE", else: "SHOW"),
             160,
             56,
-            Theme.hex(:bluey)
+            Theme.hex(:bluey),
+            &event(setup, :kb, &1)
           )
         ],
         else: []
@@ -718,7 +720,7 @@ defmodule PictureRail.View.SetupPage do
       column([width(fill()), spacing(gap)], [
         header,
         field_box(setup, id, set?(ctx, id), mode, field_h),
-        Keyboard.render(setup.keyboard, field.type, mode, inner_w, key_h)
+        Keyboard.render(setup.keyboard, field.type, mode, inner_w, key_h, &event(setup, :kb, &1))
       ])
     )
   end
@@ -752,7 +754,7 @@ defmodule PictureRail.View.SetupPage do
           Font.family("Noto Sans"),
           Font.size(36),
           Font.color(Theme.color(:white)),
-          Event.on_change({:setup, :typed, id})
+          Event.on_change(event(setup, :set, id))
         ],
         value
       )
@@ -822,14 +824,14 @@ defmodule PictureRail.View.SetupPage do
     end
   end
 
-  defp step_pill(label, message, enabled?, color) do
+  defp step_pill(label, press, enabled?, color) do
     LCARS.pill(
       label: label,
       font: 40,
       fill: Theme.color(if(enabled?, do: color, else: Theme.dim(color))),
       height: 64,
       width: px(@control_w),
-      attrs: if(enabled?, do: [Event.on_press(message)], else: [])
+      attrs: if(enabled?, do: [Event.on_press(press)], else: [])
     )
   end
 

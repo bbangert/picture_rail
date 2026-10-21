@@ -18,6 +18,8 @@ defmodule PictureRail.View.Panel do
   """
   use Emerge.UI
 
+  use Solve.Lookup, :helpers
+
   import PictureRail.App.Panel, only: [is_setup_view: 1]
 
   alias PictureRail.HA.{Index, Overview}
@@ -143,7 +145,7 @@ defmodule PictureRail.View.Panel do
           label: none()
         ),
         column([width(fill()), height(fill())], [
-          el([width(fill()), height(fill())], pager_row(pager)),
+          el([width(fill()), height(fill())], pager_row(ctx, pager)),
           bottom_bar(ctx)
         ])
       ])
@@ -174,7 +176,7 @@ defmodule PictureRail.View.Panel do
       el([width(fill()), height(px(nav_h))], nav_row(ctx)),
       el([width(fill()), height(fill()), padding_xy(0, 8)] ++ swipes, page),
       column([width(fill()), height(px(bottom_h))], [
-        el([width(fill()), height(fill())], pager_row(pager)),
+        el([width(fill()), height(fill())], pager_row(ctx, pager)),
         row([width(fill()), height(px(Theme.size(:bottom_bar))), spacing(gap)], [
           LCARS.cap(Theme.hex(ctx.frame), Theme.size(:bottom_bar), :left),
           bottom_bar(ctx)
@@ -246,10 +248,11 @@ defmodule PictureRail.View.Panel do
 
     back =
       if ctx.panel.depth > 0,
-        do: [control_pill("BACK", :bluey, :back)],
+        do: [control_pill("BACK", :bluey, event(ctx.panel, :back))],
         else: []
 
-    summaries ++ energy_pill(ctx) ++ back ++ [control_pill("CLOSE", :orange, :hide)]
+    summaries ++
+      energy_pill(ctx) ++ back ++ [control_pill("CLOSE", :orange, event(ctx.panel, :hide))]
   end
 
   # Home Assistant's energy summary: today's home use, to the Energy page.
@@ -262,20 +265,20 @@ defmodule PictureRail.View.Panel do
         fill: pill_fill(Theme.hex(:gold), true, ctx.live?),
         height: 64,
         font: Theme.size(:small) + 3,
-        attrs: [Event.on_press({:goto, :energy})]
+        attrs: [Event.on_press(event(ctx.panel, :goto, :energy))]
       )
     ]
   end
 
   defp energy_pill(_ctx), do: []
 
-  defp control_pill(label, color, message) do
+  defp control_pill(label, color, press) do
     LCARS.pill(
       color: Theme.hex(color),
       label: label,
       height: 64,
       width: px(140),
-      attrs: [Event.on_press(message)]
+      attrs: [Event.on_press(press)]
     )
   end
 
@@ -296,7 +299,7 @@ defmodule PictureRail.View.Panel do
       fill: pill_fill(color, active > 0, ctx.live?),
       height: 64,
       font: Theme.size(:small) + 3,
-      attrs: [Event.on_press({:goto, {:summary, kind}})]
+      attrs: [Event.on_press(event(ctx.panel, :goto, {:summary, kind}))]
     )
   end
 
@@ -339,16 +342,16 @@ defmodule PictureRail.View.Panel do
   end
 
   # Page number and PREV/NEXT, when the content has more than one page.
-  defp pager_row(%{count: count}) when count <= 1, do: none()
+  defp pager_row(_ctx, %{count: count}) when count <= 1, do: none()
 
-  defp pager_row(%{page: page, count: count}) do
+  defp pager_row(ctx, %{page: page, count: count}) do
     step = fn label, target, ok? ->
       LCARS.pill(
         label: label,
         fill: Theme.color(if(ok?, do: Theme.hex(:bluey), else: Theme.dim(Theme.hex(:bluey)))),
         height: 52,
         width: px(130),
-        attrs: if(ok?, do: [Event.on_press({:page, target})], else: [])
+        attrs: if(ok?, do: [Event.on_press(event(ctx.panel, :page, target))], else: [])
       )
     end
 
@@ -406,10 +409,10 @@ defmodule PictureRail.View.Panel do
         down? = page + 1 < count
 
         {Enum.at(pages, page),
-         {[nav_step("UP", {:nav_page, page - 1}, up?)],
-          [nav_step("DOWN", {:nav_page, page + 1}, down?)]},
-         swipes(:on_swipe_up, down?, {:nav_page, page + 1}) ++
-           swipes(:on_swipe_down, up?, {:nav_page, page - 1})}
+         {[nav_step("UP", event(ctx.panel, :nav_page, page - 1), up?)],
+          [nav_step("DOWN", event(ctx.panel, :nav_page, page + 1), down?)]},
+         swipes(:on_swipe_up, down?, event(ctx.panel, :nav_page, page + 1)) ++
+           swipes(:on_swipe_down, up?, event(ctx.panel, :nav_page, page - 1))}
       end
 
     {top, bottom} = controls
@@ -442,7 +445,7 @@ defmodule PictureRail.View.Panel do
       Theme.hex(Enum.at(@nav_colors, rem(i, length(@nav_colors)))),
       LCARS.fit(label, 16),
       active?: nav_active?(view, ctx.panel.view),
-      attrs: [Event.on_press({:goto, view})]
+      attrs: [Event.on_press(event(ctx.panel, :goto, view))]
     )
   end
 
@@ -450,12 +453,12 @@ defmodule PictureRail.View.Panel do
   defp nav_active?(:setup, current), do: setup_view?(current)
   defp nav_active?(view, current), do: view == current
 
-  defp nav_step(label, message, enabled?) do
+  defp nav_step(label, press, enabled?) do
     LCARS.block(Theme.hex(:orange), label,
       height: @step_h,
       active?: false,
       dim?: not enabled?,
-      attrs: if(enabled?, do: [Event.on_press(message)], else: [])
+      attrs: if(enabled?, do: [Event.on_press(press)], else: [])
     )
   end
 
@@ -515,19 +518,19 @@ defmodule PictureRail.View.Panel do
           fill:
             Theme.color(if(nav_active?(view, ctx.panel.view), do: Theme.hex(:white), else: color)),
           height: Theme.size(:nav),
-          attrs: [Event.on_press({:goto, view})]
+          attrs: [Event.on_press(event(ctx.panel, :goto, view))]
         )
       end
 
     swipes =
-      swipes(:on_swipe_left, page + 1 < count, {:nav_page, page + 1}) ++
-        swipes(:on_swipe_right, page > 0, {:nav_page, page - 1})
+      swipes(:on_swipe_left, page + 1 < count, event(ctx.panel, :nav_page, page + 1)) ++
+        swipes(:on_swipe_right, page > 0, event(ctx.panel, :nav_page, page - 1))
 
     {before, after_} =
       if count > 1,
         do:
-          {[nav_row_step("‹", page - 1, page > 0, step_w)],
-           [nav_row_step("›", page + 1, page + 1 < count, step_w)]},
+          {[nav_row_step(ctx, "‹", page - 1, page > 0, step_w)],
+           [nav_row_step(ctx, "›", page + 1, page + 1 < count, step_w)]},
         else: {[], []}
 
     row(
@@ -536,7 +539,7 @@ defmodule PictureRail.View.Panel do
     )
   end
 
-  defp nav_row_step(label, target, enabled?, width) do
+  defp nav_row_step(ctx, label, target, enabled?, width) do
     LCARS.pill(
       label: label,
       font: 40,
@@ -544,16 +547,16 @@ defmodule PictureRail.View.Panel do
         Theme.color(if(enabled?, do: Theme.hex(:orange), else: Theme.dim(Theme.hex(:orange)))),
       height: Theme.size(:nav),
       width: px(width),
-      attrs: if(enabled?, do: [Event.on_press({:nav_page, target})], else: [])
+      attrs: if(enabled?, do: [Event.on_press(event(ctx.panel, :nav_page, target))], else: [])
     )
   end
 
   # A swipe handler when it leads somewhere.
-  defp swipes(_event, false, _message), do: []
-  defp swipes(:on_swipe_up, true, message), do: [Event.on_swipe_up(message)]
-  defp swipes(:on_swipe_down, true, message), do: [Event.on_swipe_down(message)]
-  defp swipes(:on_swipe_left, true, message), do: [Event.on_swipe_left(message)]
-  defp swipes(:on_swipe_right, true, message), do: [Event.on_swipe_right(message)]
+  defp swipes(_event, false, _press), do: []
+  defp swipes(:on_swipe_up, true, press), do: [Event.on_swipe_up(press)]
+  defp swipes(:on_swipe_down, true, press), do: [Event.on_swipe_down(press)]
+  defp swipes(:on_swipe_left, true, press), do: [Event.on_swipe_left(press)]
+  defp swipes(:on_swipe_right, true, press), do: [Event.on_swipe_right(press)]
 
   defp title(ctx), do: title(ctx.panel.view, ctx.ha)
 
@@ -592,8 +595,8 @@ defmodule PictureRail.View.Panel do
     page = ctx.panel |> Map.get(:page, 0) |> Kernel.max(0) |> Kernel.min(count - 1)
 
     swipes =
-      swipes(:on_swipe_up, page + 1 < count, {:page, page + 1}) ++
-        swipes(:on_swipe_down, page > 0, {:page, page - 1})
+      swipes(:on_swipe_up, page + 1 < count, event(ctx.panel, :page, page + 1)) ++
+        swipes(:on_swipe_down, page > 0, event(ctx.panel, :page, page - 1))
 
     {render_page(Enum.at(pages, page, [])), swipes, %{page: page, count: count}}
   end
@@ -739,7 +742,7 @@ defmodule PictureRail.View.Panel do
   defp blocks(ctx, :overview, %{floors: floors, other_areas: others, devices?: devices?}) do
     tile_cols = Kernel.max(ctx.cols - 1, 2)
     tile_w = Float.floor((ctx.content_w - (tile_cols - 1) * @row_gap) / tile_cols)
-    tiles = &lazy(&1, fn area -> area_tile(area, tile_w) end)
+    tiles = &lazy(&1, fn area -> area_tile(ctx, area, tile_w) end)
 
     floor_sections =
       for {%{floor: floor, areas: areas}, i} <- Enum.with_index(floors) do
@@ -770,7 +773,7 @@ defmodule PictureRail.View.Panel do
                 color: Theme.hex(:lilac),
                 width: px(tile_w),
                 height: 110,
-                attrs: [Event.on_press({:goto, :devices})]
+                attrs: [Event.on_press(event(ctx.panel, :goto, :devices))]
               )
             ],
             tile_cols,
@@ -973,11 +976,11 @@ defmodule PictureRail.View.Panel do
       sub: "#{count} #{if count == 1, do: "ENTITY", else: "ENTITIES"}#{battery}",
       color: Theme.kind(:device),
       width: px(ctx.pill_w),
-      attrs: [Event.on_press({:device, id})]
+      attrs: [Event.on_press(event(ctx.panel, :open, {:device, id}))]
     )
   end
 
-  defp area_tile(%{area: area, temperature: temperature}, tile_w) do
+  defp area_tile(ctx, %{area: area, temperature: temperature}, tile_w) do
     # always two lines, so tiles with and without a reading line up
     sub = if temperature, do: Format.state(temperature), else: ""
 
@@ -989,7 +992,7 @@ defmodule PictureRail.View.Panel do
       height: 110,
       font: Theme.size(:heading),
       # the model is kept while disconnected, so areas still open
-      attrs: [Event.on_press({:goto, {:area, area.area_id}})]
+      attrs: [Event.on_press(event(ctx.panel, :goto, {:area, area.area_id}))]
     )
   end
 
@@ -1030,7 +1033,7 @@ defmodule PictureRail.View.Panel do
               Border.rounded_each(0, 42, 42, 0),
               Font.size(44),
               Font.color(Theme.color(:black)),
-              Event.on_press({:detail, entity_id})
+              Event.on_press(event(ctx.panel, :open, {:entity, entity_id}))
             ],
             el([center_x(), center_y()], text("›"))
           )
@@ -1111,12 +1114,14 @@ defmodule PictureRail.View.Panel do
     [
       action_row([
         action(
+          ctx,
           "On",
           color,
           %{domain: "light", service: "turn_on", entity_id: id, optimistic: "on"},
           on?
         ),
         action(
+          ctx,
           "Off",
           color,
           %{domain: "light", service: "turn_off", entity_id: id, optimistic: "off"},
@@ -1126,7 +1131,7 @@ defmodule PictureRail.View.Panel do
     ] ++ brightness ++ temp
   end
 
-  defp detail_controls(_ctx, "climate", id, es, color) do
+  defp detail_controls(ctx, "climate", id, es, color) do
     attrs = es.attributes
     step = attrs["target_temp_step"] || 0.5
     target = attrs["temperature"]
@@ -1135,12 +1140,12 @@ defmodule PictureRail.View.Panel do
       if is_number(target),
         do: [
           action_row([
-            action("−", color, set_temperature(id, target - step), false),
+            action(ctx, "−", color, set_temperature(id, target - step), false),
             el(
               [width(px(220)), center_y(), Font.size(64), Font.color(Theme.color(color))],
               el([center_x()], text("#{target}°"))
             ),
-            action("+", color, set_temperature(id, target + step), false)
+            action(ctx, "+", color, set_temperature(id, target + step), false)
           ])
         ],
         else: []
@@ -1148,6 +1153,7 @@ defmodule PictureRail.View.Panel do
     modes =
       for mode <- attrs["hvac_modes"] || [] do
         action(
+          ctx,
           String.replace(mode, "_", " "),
           color,
           %{
@@ -1168,13 +1174,21 @@ defmodule PictureRail.View.Panel do
     buttons =
       action_row([
         action(
+          ctx,
           "Open",
           color,
           %{domain: "cover", service: "open_cover", entity_id: id},
           es.state == "open"
         ),
-        action("Stop", color, %{domain: "cover", service: "stop_cover", entity_id: id}, false),
         action(
+          ctx,
+          "Stop",
+          color,
+          %{domain: "cover", service: "stop_cover", entity_id: id},
+          false
+        ),
+        action(
+          ctx,
           "Close",
           color,
           %{domain: "cover", service: "close_cover", entity_id: id},
@@ -1200,14 +1214,15 @@ defmodule PictureRail.View.Panel do
 
     transport =
       action_row([
-        action("‹‹", color, call.("media_previous_track"), false),
+        action(ctx, "‹‹", color, call.("media_previous_track"), false),
         action(
+          ctx,
           if(es.state == "playing", do: "Pause", else: "Play"),
           color,
           call.("media_play_pause"),
           true
         ),
-        action("››", color, call.("media_next_track"), false)
+        action(ctx, "››", color, call.("media_next_track"), false)
       ])
 
     volume =
@@ -1228,6 +1243,7 @@ defmodule PictureRail.View.Panel do
               action_row(
                 for source <- Enum.take(list, 8) do
                   action(
+                    ctx,
                     source,
                     color,
                     %{
@@ -1250,7 +1266,7 @@ defmodule PictureRail.View.Panel do
     [transport] ++ volume ++ sources
   end
 
-  defp detail_controls(_ctx, _domain, id, es, color) do
+  defp detail_controls(ctx, _domain, id, es, color) do
     case tap_action(id, es) do
       nil ->
         []
@@ -1258,7 +1274,7 @@ defmodule PictureRail.View.Panel do
       request ->
         [
           action_row([
-            action(if(request[:optimistic], do: "Toggle", else: "Run"), color, request, true)
+            action(ctx, if(request[:optimistic], do: "Toggle", else: "Run"), color, request, true)
           ])
         ]
     end
@@ -1274,12 +1290,12 @@ defmodule PictureRail.View.Panel do
 
   defp action_row(children), do: wrapped_row([width(fill()), spacing_xy(12, 12)], children)
 
-  defp action(label, color, request, active?) do
+  defp action(ctx, label, color, request, active?) do
     LCARS.pill(
       label: String.upcase(label),
       fill: Theme.color(if(active?, do: color, else: Theme.dim(color))),
       width: px(200),
-      attrs: [Event.on_press({:call, request})]
+      attrs: [Event.on_press(event(ctx.ha, :call, request))]
     )
   end
 

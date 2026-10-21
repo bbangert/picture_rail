@@ -13,8 +13,12 @@ defmodule PictureRail.View.Keyboard do
       the focus away from it.
     * `:masked` - for a secret that isn't shown: Emerge has no password
       field, so the page draws bullets itself and every key is an app
-      event (`{:setup, :kb, key}`) the `:setup` controller applies with
-      `edit/2` (append and backspace only).
+      event, which the `:setup` controller applies with `edit/2` (append
+      and backspace only).
+
+  The app events go where the caller says: `on_key` gives the press for a
+  key (an event tuple, `key -> {pid, message}`, `nil` for nowhere), so the
+  keyboard knows nothing of who handles them.
 
   Shift is one-shot (the next letter, then off); a second tap within
   400 ms locks it (caps lock) until it's tapped again. Shift and the
@@ -144,30 +148,33 @@ defmodule PictureRail.View.Keyboard do
   # -- Keys --
 
   @doc """
-  A key's `Event.virtual_key/1` spec. `pid` gets the app events
-  (`{:setup, :kb, key}`).
+  A key's `Event.virtual_key/1` spec. `on_key` gives the app events'
+  presses (see the moduledoc).
   """
-  @spec key_spec(key(), mode(), pid()) :: map()
-  def key_spec({:char, text}, :native, _pid), do: %{tap: {:text, text}}
-  def key_spec(:space, :native, _pid), do: %{tap: {:text, " "}}
-  def key_spec(:backspace, :native, _pid), do: %{tap: {:key, :backspace, []}, hold: :repeat}
-  def key_spec(:left, :native, _pid), do: %{tap: {:key, :arrow_left, []}, hold: :repeat}
-  def key_spec(:right, :native, _pid), do: %{tap: {:key, :arrow_right, []}, hold: :repeat}
+  @spec key_spec(key(), mode(), (key() -> term())) :: map()
+  def key_spec({:char, text}, :native, _on_key), do: %{tap: {:text, text}}
+  def key_spec(:space, :native, _on_key), do: %{tap: {:text, " "}}
+  def key_spec(:backspace, :native, _on_key), do: %{tap: {:key, :backspace, []}, hold: :repeat}
+  def key_spec(:left, :native, _on_key), do: %{tap: {:key, :arrow_left, []}, hold: :repeat}
+  def key_spec(:right, :native, _on_key), do: %{tap: {:key, :arrow_right, []}, hold: :repeat}
 
   # Everything else is the app's: the hold fires at once (hold_ms 0), so
   # the tap (a no-op shift press) never happens.
-  def key_spec(key, _mode, pid),
-    do: %{tap: {:key, :shift, []}, hold: {:event, {pid, {:setup, :kb, key}}}, hold_ms: 0}
+  def key_spec(key, _mode, on_key) do
+    case on_key.(key) do
+      nil -> %{tap: {:key, :shift, []}}
+      press -> %{tap: {:key, :shift, []}, hold: {:event, press}, hold_ms: 0}
+    end
+  end
 
   # -- Drawing --
 
   @doc """
-  The keyboard for `kb`, `w` px wide with keys `key_h` tall, keys sending
-  to the calling process (the viewport).
+  The keyboard for `kb`, `w` px wide with keys `key_h` tall, the app
+  events' presses from `on_key`.
   """
-  @spec render(state(), atom(), mode(), number(), number()) :: term()
-  def render(kb, field_type, mode, w, key_h) do
-    pid = self()
+  @spec render(state(), atom(), mode(), number(), number(), (key() -> term())) :: term()
+  def render(kb, field_type, mode, w, key_h, on_key) do
     gap = 8
     font = round(Kernel.min(key_h * 0.42, 40))
 
@@ -175,7 +182,7 @@ defmodule PictureRail.View.Keyboard do
       for keys <- layout(kb.layer, kb.shift, field_type, mode) do
         elements =
           for {key, label, weight} <- keys,
-              do: key_element(kb, key, label, weight, mode, pid, font)
+              do: key_element(kb, key, label, weight, mode, on_key, font)
 
         row([width(px(w)), height(px(key_h)), spacing(gap)], elements)
       end
@@ -187,11 +194,12 @@ defmodule PictureRail.View.Keyboard do
   A single key outside the keyboard (the editor's SHOW/HIDE), `w` x `h`,
   in `color` (hex). Like every key it never takes the focus.
   """
-  @spec key(key(), String.t(), number(), number(), non_neg_integer()) :: term()
-  def key(key, label, w, h, color) do
+  @spec key(key(), String.t(), number(), number(), non_neg_integer(), (key() -> term())) ::
+          term()
+  def key(key, label, w, h, color, on_key) do
     Input.button(
       [
-        Event.virtual_key(key_spec(key, :masked, self())),
+        Event.virtual_key(key_spec(key, :masked, on_key)),
         width(px(w)),
         height(px(h)),
         Background.color(Theme.color(color)),
@@ -204,12 +212,12 @@ defmodule PictureRail.View.Keyboard do
     )
   end
 
-  defp key_element(kb, key, label, weight, mode, pid, font) do
+  defp key_element(kb, key, label, weight, mode, on_key, font) do
     color = key_color(kb, key)
 
     Input.button(
       [
-        Event.virtual_key(key_spec(key, mode, pid)),
+        Event.virtual_key(key_spec(key, mode, on_key)),
         width(fill(weight)),
         height(fill()),
         Background.color(Theme.color(color)),
