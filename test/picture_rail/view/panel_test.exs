@@ -111,6 +111,43 @@ defmodule PictureRail.View.PanelTest do
     assert Panel.paginate([], 500) == [[]]
   end
 
+  test "pagination needs only heights: a row's item functions aren't called" do
+    test = self()
+    item = fn n -> fn -> send(test, {:built, n}) end end
+    heading = {:heading, 0, "a"}
+    blocks = [heading | for(n <- 1..30, do: {:row, 84, [item.(n)], heading})]
+
+    assert [_ | _] = Panel.paginate(blocks, 500)
+    refute_received {:built, _}
+  end
+
+  test "a long list's page is drawn from its item functions" do
+    ids = for n <- 1..60, do: "light.l#{n}"
+
+    states =
+      Map.new(ids, &{&1, %Hassock.EntityState{entity_id: &1, state: "on", attributes: %{}}})
+
+    names = Map.new(Enum.with_index(ids, 1), fn {id, n} -> {{id, :full}, "Lamp #{n}"} end)
+    slice = %{sections: [%{title: "Lights", groups: [%{title: nil, entity_ids: ids}]}]}
+
+    ctx = %{
+      size: {1920, 1080},
+      portrait?: false,
+      panel: %{visible?: true, view: {:summary, :light}, page: 0, nav_page: 0, depth: 1},
+      ha: %{status: :connected, slice: slice, states: states, names: names, nav: []},
+      setup: nil,
+      settings: nil,
+      photos: nil,
+      network: nil,
+      pairing: nil,
+      sliders: %{}
+    }
+
+    tree = inspect(Panel.render(ctx), limit: :infinity, printable_limit: :infinity)
+    assert tree =~ "LAMP 1\""
+    refute tree =~ "LAMP 60\""
+  end
+
   test "an entity's detail renders without anything from Home Assistant" do
     # as the viewport has it while the :ha controller is down
     ctx = %{
