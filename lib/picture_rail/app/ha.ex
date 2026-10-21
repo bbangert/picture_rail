@@ -18,9 +18,18 @@ defmodule PictureRail.App.HA do
       attributes, the entity shows them at once, until Home Assistant
       reports them, the call fails (rolled back, and `error` set), or 10 s
       pass.
+    * `:press` - `{entity_id, long?}`, a pill's press (the viewport times
+      the touch): a long press opens the entity's detail; a tap toggles or
+      runs it (`PictureRail.HA.Actions.tap/2`), or opens its detail when
+      it has one (the `:open` callback, to the panel).
+    * `:slide` - `{{entity_id, kind}, value}`, a slider under the finger:
+      shown at once (`sliders`), sent at most every 250 ms
+      (`PictureRail.HA.Actions.slider/3`), then held optimistically like
+      any call.
 
-  Exposes `%{status:, revision:, view:, slice:, states:, names:, nav:, energy:,
-  error:}`.
+  Exposes `%{status:, revision:, view:, slice:, states:, sliders:, names:, nav:,
+  energy:, error:}`; `sliders` the values under a finger by `{entity_id,
+  kind}`.
   `slice` is `PictureRail.HA.Overview`'s result for the panel's view, or
   `:loading` before the model's first build, `:gone` when what the view
   showed was removed in Home Assistant, `nil` while the panel is down.
@@ -35,15 +44,16 @@ defmodule PictureRail.App.HA do
   process per view, model revision and on-screen change (`tick`): an event
   for an entity that isn't on screen costs a map lookup.
   """
-  use Solve.Controller, events: [:status, :model, :states, :call, :energy]
+  use Solve.Controller, events: [:status, :model, :states, :call, :energy, :press, :slide]
 
   import PictureRail.App.Panel, only: [is_setup_view: 1]
 
   require Logger
 
-  alias PictureRail.HA.{EnergyPoller, Model, Overview}
+  alias PictureRail.HA.{Actions, EnergyPoller, Model, Overview}
 
   @optimistic_ms 10_000
+  @slide_send_ms 250
 
   @impl Solve.Controller
   def init(_params, _dependencies) do
@@ -54,7 +64,9 @@ defmodule PictureRail.App.HA do
       tick: 0,
       pending: %{},
       error: nil,
-      energy: EnergyPoller.latest()
+      energy: EnergyPoller.latest(),
+      # slider values under the finger, not sent yet
+      sliding: %{}
     }
   end
 
@@ -73,13 +85,57 @@ defmodule PictureRail.App.HA do
 
   def call(request, state, _deps, callbacks), do: start_call(request, state, callbacks)
 
-  def handle_info({ref, result}, state) when is_reference(ref), do: call_done(ref, result, state)
+  def press({entity_id, long?}, state, _deps, callbacks, params) do
+    es = with_pending(source(params).state.(entity_id), state.pending[entity_id])
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, state),
+    cond do
+      long? ->
+        open_detail(entity_id, state, callbacks)
+
+      request = Actions.tap(entity_id, es) ->
+        start_call(request, state, callbacks)
+
+      Actions.detail?(entity_id) ->
+        open_detail(entity_id, state, callbacks)
+
+      true ->
+        state
+    end
+  end
+
+  def slide({key, value}, state) do
+    unless Map.has_key?(state.sliding, key),
+      do: Process.send_after(self(), {:slide_send, key}, @slide_send_ms)
+
+    %{state | sliding: Map.put(state.sliding, key, value)}
+  end
+
+  def handle_info({ref, result}, state, _deps, _callbacks) when is_reference(ref),
+    do: call_done(ref, result, state)
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state, _deps, _callbacks),
     do: call_done(ref, {:error, {:crashed, reason}}, state)
 
-  def handle_info({:expire, entity_id, ref}, state), do: expire(entity_id, ref, state)
-  def handle_info(_message, state), do: state
+  def handle_info({:expire, entity_id, ref}, state, _deps, _callbacks),
+    do: expire(entity_id, ref, state)
+
+  # Sent: from here on the value is held as an optimistic attribute until
+  # Home Assistant reports it.
+  def handle_info({:slide_send, {entity_id, kind} = key}, state, _deps, callbacks) do
+    {value, sliding} = Map.pop(state.sliding, key)
+    state = %{state | sliding: sliding}
+
+    if value == nil,
+      do: state,
+      else: start_call(Actions.slider(entity_id, kind, value), state, callbacks)
+  end
+
+  def handle_info(_message, state, _deps, _callbacks), do: state
+
+  defp open_detail(entity_id, state, callbacks) do
+    callbacks.open.({:entity, entity_id})
+    state
+  end
 
   # -- Service calls and optimistic state --
 
@@ -296,6 +352,7 @@ defmodule PictureRail.App.HA do
       view: view(deps),
       slice: slice,
       states: states,
+      sliders: state.sliding,
       names: names(ids, state, params),
       nav: if(visible?, do: nav(state, params), else: []),
       # only while the panel is up, so a refresh doesn't redraw the slideshow

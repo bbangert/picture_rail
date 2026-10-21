@@ -204,7 +204,7 @@ defmodule PictureRail.View.SetupPage do
         color: Theme.hex(@colors[section]),
         height: h,
         width: px(section_w(ctx)),
-        attrs: [Event.on_press({:setup_open, section})]
+        attrs: [Event.on_press(event(ctx.panel, :open, {:setup, section}))]
       )
     end
   end
@@ -263,7 +263,7 @@ defmodule PictureRail.View.SetupPage do
         color: Theme.hex(:mauve),
         height: 64,
         width: px(@control_w),
-        attrs: [Event.on_press(:forget_paired)]
+        attrs: [Event.on_press(event(pairing, :forget))]
       )
 
     about =
@@ -363,7 +363,7 @@ defmodule PictureRail.View.SetupPage do
              color: Theme.hex(:orange),
              height: 72,
              width: px(@control_w),
-             attrs: [Event.on_press({:setup_next, :photo_source})]
+             attrs: [Event.on_press(event(ctx.panel, :replace, {:setup, :photo_source}))]
            )
          ], nil}
       ]

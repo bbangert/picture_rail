@@ -138,6 +138,7 @@ defmodule PictureRail.View.SetupPageTest do
     ctx =
       Map.merge(exposed(@immich), %{
         photos: nil,
+        panel: nil,
         network: connected,
         pairing: pairing.("01234567", connected),
         portrait?: false,

@@ -107,12 +107,16 @@ defmodule PictureRail.Web.PairingTest do
     # ended for now all the same
     refute Pairing.secret_key_base(pairing) == old
 
-    assert PictureRail.App.Pairing.forgot({:error, :not_saved}, %{forget_failed?: false}) ==
+    # the :pairing controller shows what forgetting returned
+    failed = %{forget: fn -> Pairing.forget(pairing) end}
+
+    assert PictureRail.App.Pairing.forget(nil, %{forget_failed?: false}, %{}, failed) ==
              %{forget_failed?: true}
 
-    assert PictureRail.App.Pairing.forgot(:ok, %{forget_failed?: true}) == %{
-             forget_failed?: false
-           }
+    worked = %{forget: fn -> :ok end}
+
+    assert PictureRail.App.Pairing.forget(nil, %{forget_failed?: true}, %{}, worked) ==
+             %{forget_failed?: false}
   end
 
   test "the code changes by itself", %{tmp_dir: dir} do

@@ -9,7 +9,8 @@ defmodule PictureRail.App.Panel do
       activity
     * `:activity` - any interaction with the panel; restarts the timeout
     * `:open` - push a view (`{:area, id}`, `{:summary, kind}`, `:media`,
-      `:devices`, `:energy`, `{:device, device_id}`, `{:entity, entity_id}`)
+      `:devices`, `:energy`, `{:device, device_id}`, `{:entity, entity_id}`,
+      `:setup`, `{:setup, section}`)
     * `:replace` - put a view in place of the current one (Setup's "Next":
       there's one Setup editor, so a section doesn't stack on another)
     * `:goto` - go to a view from the navigation: it replaces the stack
@@ -27,6 +28,14 @@ defmodule PictureRail.App.Panel do
   checked again when the time is up, as `:setup` can become busy after
   the timer was set (on first boot it opens with the panel).
 
+  A Setup section's view has an editor: opening one, however it's
+  reached, opens its editor too (the `:open_setup` callback, to
+  `:setup`).
+
+  On first boot (no Wi-Fi, no Ethernet, nothing set up: the `:first_boot?`
+  callback, given what's configured) it opens on Wi-Fi setup by itself, a
+  few seconds after it starts.
+
   Exposes `%{visible?: boolean, view: view, depth: n, page: n, nav_page: n}`.
   """
   use Solve.Controller,
@@ -37,8 +46,13 @@ defmodule PictureRail.App.Panel do
            when view == :setup or
                   (is_tuple(view) and tuple_size(view) == 2 and elem(view, 0) == :setup)
 
+  @first_boot_ms 3_000
+
   @impl Solve.Controller
-  def init(_params, _dependencies), do: fresh()
+  def init(_params, _dependencies) do
+    Process.send_after(self(), :first_boot, @first_boot_ms)
+    fresh()
+  end
 
   # The stack holds `{view, page}`; the overview's page is `root_page`.
   defp fresh, do: %{visible?: false, stack: [], root_page: 0, nav_page: 0, token: nil}
@@ -48,19 +62,28 @@ defmodule PictureRail.App.Panel do
   def activity(_payload, %{visible?: true} = state, deps), do: restart_timer(state, deps)
   def activity(_payload, state, _deps), do: state
 
-  def open(view, state, deps),
-    do: %{state | visible?: true, stack: [{view, 0} | state.stack]} |> restart_timer(deps)
+  def open(view, state, deps, callbacks) do
+    open_setup(view, callbacks)
+    %{state | visible?: true, stack: [{view, 0} | state.stack]} |> restart_timer(deps)
+  end
 
-  def replace(view, %{stack: [_ | rest]} = state, deps),
-    do: %{state | visible?: true, stack: [{view, 0} | rest]} |> restart_timer(deps)
+  def replace(view, %{stack: [_ | rest]} = state, deps, callbacks) do
+    open_setup(view, callbacks)
+    %{state | visible?: true, stack: [{view, 0} | rest]} |> restart_timer(deps)
+  end
 
-  def replace(view, state, deps), do: open(view, state, deps)
+  def replace(view, state, deps, callbacks), do: open(view, state, deps, callbacks)
 
-  def goto(:overview, state, deps),
+  def goto(:overview, state, deps, _callbacks),
     do: %{state | visible?: true, stack: [], root_page: 0} |> restart_timer(deps)
 
-  def goto(view, state, deps),
-    do: %{state | visible?: true, stack: [{view, 0}]} |> restart_timer(deps)
+  def goto(view, state, deps, callbacks) do
+    open_setup(view, callbacks)
+    %{state | visible?: true, stack: [{view, 0}]} |> restart_timer(deps)
+  end
+
+  defp open_setup({:setup, section}, %{open_setup: open}), do: open.(section)
+  defp open_setup(_view, _callbacks), do: :ok
 
   def back(_payload, %{stack: [_ | rest]} = state, deps),
     do: %{state | stack: rest} |> restart_timer(deps)
@@ -76,8 +99,23 @@ defmodule PictureRail.App.Panel do
 
   def hide(_payload, _state), do: fresh()
 
-  def handle_info({:timeout, token}, state, deps), do: timed_out(token, state, deps)
-  def handle_info(_message, state, _deps), do: state
+  def handle_info({:timeout, token}, state, deps, _callbacks), do: timed_out(token, state, deps)
+  def handle_info(:first_boot, state, deps, callbacks), do: first_boot(state, deps, callbacks)
+  def handle_info(_message, state, _deps, _callbacks), do: state
+
+  @doc "Open Wi-Fi setup if nothing is set up (the `:first_boot?` callback)."
+  @spec first_boot(map(), map(), map()) :: map()
+  def first_boot(
+        state,
+        %{settings: %{configured: configured}} = deps,
+        %{first_boot?: check} = callbacks
+      ) do
+    if check.(configured),
+      do: goto({:setup, :wifi}, state, deps, callbacks),
+      else: state
+  end
+
+  def first_boot(state, _deps, _callbacks), do: state
 
   @doc """
   Hide the panel if `token` is the current idle timer's, unless a Setup

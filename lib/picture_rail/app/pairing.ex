@@ -2,8 +2,9 @@ defmodule PictureRail.App.Pairing do
   @moduledoc """
   `:pairing` controller: the code the Setup page shows for pairing a phone
   with the settings web page (`PictureRail.Web.Pairing`), the QR code of
-  its pairing link, the page's address by name, and whether the last
-  "Forget devices" couldn't be saved.
+  its pairing link, the page's address by name, and "Forget devices"
+  (`:forget`, through the `:forget` callback: `PictureRail.Web.Pairing.forget/1`),
+  with whether that couldn't be saved.
 
   Exposes `%{code: code | nil, qr: runs | nil, address: url,
   forget_failed?: boolean}`. `qr` (`PictureRail.QR.encode/1` of
@@ -11,7 +12,7 @@ defmodule PictureRail.App.Pairing do
   frame is connected (`:network` has its IP); it's encoded once per link,
   not on every render or network report.
   """
-  use Solve.Controller, events: [:code, :forgot]
+  use Solve.Controller, events: [:code, :forget]
 
   alias PictureRail.{QR, Web}
   alias PictureRail.Web.Pairing
@@ -26,8 +27,8 @@ defmodule PictureRail.App.Pairing do
 
   def code(code, state), do: %{state | code: code}
 
-  @doc "What `PictureRail.Web.Pairing.forget/1` returned."
-  def forgot(result, state), do: %{state | forget_failed?: result != :ok}
+  def forget(_payload, state, _deps, %{forget: forget}),
+    do: %{state | forget_failed?: forget.() != :ok}
 
   @impl Solve.Controller
   def expose(state, deps, _params) do
