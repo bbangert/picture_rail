@@ -15,16 +15,23 @@ defmodule PictureRail.View do
   hardware module (`screen_size/0`, DRM sends no resize event) or else from
   `:resize` events (a desktop window).
 
-  The panel (`PictureRail.View.Panel`) sends its presses here. A pill's press
-  is a tap unless the touch that made it was held for
+  Presses go straight to the controller that owns what they change: the
+  views give elements Solve's event tuples (`event/2,3`), which Emerge
+  sends to that controller without passing through here. `wrap_payload/3`
+  folds a value event's payload in with its fixed argument (a text
+  field's id and its text). Any touch or click while the panel is up
+  restarts its idle timeout.
+
+  A few presses still come here, where they need more than one
+  controller: a pill's press is a tap unless the touch that made it was
+  held for
   `panel.long_press_ms` (settings) without moving: Emerge has no
   long-press event, and pairing `on_mouse_down` with `on_press` on one
   element can lose the press, so holds are timed from the raw `:touch`
-  events, which arrive before the press. Any touch while the panel is up
-  restarts its idle timeout. Slider drags are sent to Home Assistant at
-  most every 250 ms; the value under the finger is held here until it is
-  sent, then by the `:ha` controller as an optimistic attribute until Home
-  Assistant reports it. Page flips go to the `:panel` controller.
+  events, which arrive before the press. Slider drags are sent to Home
+  Assistant at most every 250 ms; the value under the finger is held here
+  until it is sent, then by the `:ha` controller as an optimistic
+  attribute until Home Assistant reports it.
 
   Start options: `spike: true` shows the rotation test card instead of the
   normal UI (plan task 2.3); `stats: true` logs Emerge's frame statistics.
@@ -74,7 +81,8 @@ defmodule PictureRail.View do
   @impl Viewport
   def mount(opts) do
     config = Config.build()
-    config = %{config | input: add_events(config.input, [:resize])}
+    # presses for the panel's timeout from a mouse too (a desktop window)
+    config = %{config | input: add_events(config.input, [:resize, :pointer_button])}
 
     config =
       if Keyword.get(opts, :stats, false),
@@ -310,6 +318,11 @@ defmodule PictureRail.View do
     {:noreply, %{state | touches: Map.put(state.touches, id, touch)}}
   end
 
+  def handle_input({:pointer_button, {_button, :press, _mods, _pos}}, state) do
+    if panel_visible?(), do: send_event(:panel, :activity, nil)
+    {:noreply, state}
+  end
+
   def handle_input({:touch, {id, :move, pos}}, state) do
     case state.touches do
       %{^id => touch} ->
@@ -368,36 +381,6 @@ defmodule PictureRail.View do
     {:noreply, %{state | last_release: nil}}
   end
 
-  def handle_info({:page, page}, state) do
-    send_event(:panel, :page, page)
-    {:noreply, state}
-  end
-
-  def handle_info({:nav_page, page}, state) do
-    send_event(:panel, :nav_page, page)
-    {:noreply, state}
-  end
-
-  def handle_info({:device, device_id}, state) do
-    send_event(:panel, :open, {:device, device_id})
-    {:noreply, state}
-  end
-
-  def handle_info({:detail, entity_id}, state) do
-    send_event(:panel, :open, {:entity, entity_id})
-    {:noreply, state}
-  end
-
-  def handle_info({:goto, view}, state) do
-    send_event(:panel, :goto, view)
-    {:noreply, state}
-  end
-
-  def handle_info(message, state) when message in [:back, :hide] do
-    send_event(:panel, message, nil)
-    {:noreply, state}
-  end
-
   # The Setup page's "Forget devices": every web page session ends.
   def handle_info(:forget_paired, state) do
     send_event(:panel, :activity, nil)
@@ -417,25 +400,6 @@ defmodule PictureRail.View do
   def handle_info({:setup_next, section}, state) do
     send_event(:setup, :open, section)
     send_event(:panel, :replace, {:setup, section})
-    {:noreply, state}
-  end
-
-  # the native field's text (Emerge appends the value to the message)
-  def handle_info({:setup, :typed, id, value}, state) do
-    send_event(:panel, :activity, nil)
-    send_event(:setup, :set, {id, value})
-    {:noreply, state}
-  end
-
-  def handle_info({:setup, event, payload}, state) do
-    send_event(:panel, :activity, nil)
-    send_event(:setup, event, payload)
-    {:noreply, state}
-  end
-
-  def handle_info({:call, request}, state) do
-    send_event(:panel, :activity, nil)
-    send_event(:ha, :call, request)
     {:noreply, state}
   end
 
@@ -545,6 +509,15 @@ defmodule PictureRail.View do
       data: %{volume_level: v / 100},
       optimistic_attrs: %{"volume_level" => v / 100}
     }
+
+  # An event tuple with a fixed argument on a value event (`on_change`):
+  # one payload, `{argument, value}`, as Solve takes one.
+  @impl Emerge
+  def wrap_payload({:solve_event, event, argument}, value, _event_type),
+    do: {:solve_event, event, {argument, value}}
+
+  def wrap_payload(message, payload, event_type),
+    do: Emerge.default_wrap_payload(message, payload, event_type)
 
   @impl Solve.Lookup
   def handle_solve_updated(_updated, state), do: {:ok, Viewport.rerender(state)}

@@ -72,26 +72,30 @@ defmodule PictureRail.View.KeyboardTest do
     assert Keyboard.edit("ab", :shift, 10) == "ab"
   end
 
-  test "key specs: native keys type, the rest are app events" do
+  test "key specs: native keys type, the rest are the caller's presses" do
     pid = self()
-    assert Keyboard.key_spec({:char, "a"}, :native, pid) == %{tap: {:text, "a"}}
+    on_key = &{pid, {:pressed, &1}}
+    assert Keyboard.key_spec({:char, "a"}, :native, on_key) == %{tap: {:text, "a"}}
 
     assert %{tap: {:key, :backspace, []}, hold: :repeat} =
-             Keyboard.key_spec(:backspace, :native, pid)
+             Keyboard.key_spec(:backspace, :native, on_key)
 
-    assert %{tap: {:key, :arrow_left, []}} = Keyboard.key_spec(:left, :native, pid)
+    assert %{tap: {:key, :arrow_left, []}} = Keyboard.key_spec(:left, :native, on_key)
 
-    assert %{hold: {:event, {^pid, {:setup, :kb, :done}}}, hold_ms: 0} =
-             Keyboard.key_spec(:done, :native, pid)
+    assert %{hold: {:event, {^pid, {:pressed, :done}}}, hold_ms: 0} =
+             Keyboard.key_spec(:done, :native, on_key)
 
-    assert %{hold: {:event, {^pid, {:setup, :kb, {:char, "a"}}}}} =
-             Keyboard.key_spec({:char, "a"}, :masked, pid)
+    assert %{hold: {:event, {^pid, {:pressed, {:char, "a"}}}}} =
+             Keyboard.key_spec({:char, "a"}, :masked, on_key)
+
+    # nowhere to send it (the controller is down): no hold event
+    refute Map.has_key?(Keyboard.key_spec(:done, :native, fn _ -> nil end), :hold)
 
     # every spec is one Emerge accepts
     for row <- Keyboard.layout(:letters, :off, :url),
         {key, _, _} <- row,
         mode <- [:native, :masked] do
-      assert {:virtual_key, _} = Event.virtual_key(Keyboard.key_spec(key, mode, pid))
+      assert {:virtual_key, _} = Event.virtual_key(Keyboard.key_spec(key, mode, on_key))
     end
   end
 
