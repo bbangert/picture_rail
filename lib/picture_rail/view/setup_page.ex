@@ -20,6 +20,11 @@ defmodule PictureRail.View.SetupPage do
   @row_h 84
   @error_h 30
   @choice_h 72
+  # Every control pill on a Setup page is this wide (the widest label,
+  # "NEXT: PHOTOS", fits), and list pills are a column wide, so pills
+  # line up as LCARS panels do.
+  @control_w 200
+  @row_gap 12
 
   # -- What to show --
 
@@ -240,7 +245,7 @@ defmodule PictureRail.View.SetupPage do
              label: "NEXT: PHOTOS",
              color: Theme.hex(:orange),
              height: 72,
-             width: px(260),
+             width: px(@control_w),
              attrs: [Event.on_press({:setup_open, :photo_source})]
            )
          ], nil}
@@ -257,6 +262,8 @@ defmodule PictureRail.View.SetupPage do
       {:heading, color, if(network[:scanning?], do: "Networks (scanning)", else: "Networks")}
 
     joining? = network[:trial] != nil
+    per_row = Kernel.max(ctx.cols - 2, 1)
+    w = column_w(ctx, per_row)
 
     pills =
       for n <- network[:networks] || [] do
@@ -267,6 +274,7 @@ defmodule PictureRail.View.SetupPage do
           sub: network_line(n),
           fill: choice_fill(color, usable?),
           height: 96,
+          width: px(w),
           attrs: if(usable?, do: [Event.on_press({:setup, :wifi_pick, n})], else: [])
         )
       end
@@ -277,12 +285,13 @@ defmodule PictureRail.View.SetupPage do
         sub: "A hidden one",
         color: Theme.hex(:lilac),
         height: 96,
+        width: px(w),
         attrs: if(joining?, do: [], else: [Event.on_press({:setup, :wifi_other, nil})])
       )
 
     rows =
       (pills ++ [other])
-      |> Enum.chunk_every(Kernel.max(ctx.cols - 2, 1))
+      |> Enum.chunk_every(per_row)
       |> Enum.map(&{:row, 96, &1, heading})
 
     [heading | rows]
@@ -297,7 +306,7 @@ defmodule PictureRail.View.SetupPage do
         label: if(network[:trial], do: "JOINING", else: "JOIN"),
         fill: Theme.color(if(busy?, do: Theme.dim(Theme.hex(:orange)), else: Theme.hex(:orange))),
         height: 72,
-        width: px(180),
+        width: px(@control_w),
         attrs: if(busy?, do: [], else: [Event.on_press({:setup, :join, nil})])
       )
 
@@ -306,7 +315,7 @@ defmodule PictureRail.View.SetupPage do
         label: "NETWORKS",
         color: Theme.hex(:mauve),
         height: 72,
-        width: px(200),
+        width: px(@control_w),
         attrs: [Event.on_press({:setup, :wifi_list, nil})]
       )
 
@@ -320,7 +329,7 @@ defmodule PictureRail.View.SetupPage do
   end
 
   # A row of the known sources, when there's more than one to choose from.
-  defp source_picker(_ctx, %{section: :photo_source, draft: draft}, color) do
+  defp source_picker(ctx, %{section: :photo_source, draft: draft}, color) do
     case PhotoSource.sources() do
       [_only] ->
         []
@@ -328,6 +337,7 @@ defmodule PictureRail.View.SetupPage do
       sources ->
         heading = {:heading, color, "Source"}
         current = Setup.source(draft)
+        per_row = Kernel.max(ctx.cols - 1, 1)
 
         pills =
           for module <- sources do
@@ -335,11 +345,13 @@ defmodule PictureRail.View.SetupPage do
               label: String.upcase(module.label()),
               fill: choice_fill(color, module == current),
               height: @choice_h,
+              width: px(column_w(ctx, per_row)),
               attrs: [Event.on_press({:setup, :set_type, module.type()})]
             )
           end
 
-        [heading, {:row, @choice_h, pills, heading}]
+        rows = pills |> Enum.chunk_every(per_row) |> Enum.map(&{:row, @choice_h, &1, heading})
+        [heading | rows]
     end
   end
 
@@ -351,7 +363,7 @@ defmodule PictureRail.View.SetupPage do
         label: if(on?, do: "ON", else: "OFF"),
         fill: choice_fill(color, on?),
         height: 64,
-        width: px(160),
+        width: px(@control_w),
         attrs: [Event.on_press({:setup, :toggle, id})]
       )
 
@@ -393,7 +405,7 @@ defmodule PictureRail.View.SetupPage do
         label: "EDIT",
         color: color,
         height: 64,
-        width: px(140),
+        width: px(@control_w),
         attrs: [Event.on_press({:setup, :edit, id})]
       )
 
@@ -402,11 +414,12 @@ defmodule PictureRail.View.SetupPage do
 
   defp field_blocks(ctx, {:choices, id, label, choices, selected, error}, color) do
     heading = {:heading, color, label}
+    per_row = Kernel.max(ctx.cols - 1, 1)
 
     rows =
       choices
-      |> choice_pills(id, selected, color)
-      |> Enum.chunk_every(Kernel.max(ctx.cols - 1, 1))
+      |> choice_pills(id, selected, color, column_w(ctx, per_row))
+      |> Enum.chunk_every(per_row)
       |> Enum.map(&{:row, @choice_h, &1, heading})
 
     status =
@@ -420,18 +433,19 @@ defmodule PictureRail.View.SetupPage do
     [heading] ++ rows ++ [status]
   end
 
-  defp choice_pills({:ok, list}, id, selected, color) do
+  defp choice_pills({:ok, list}, id, selected, color, w) do
     for {value, label} <- list do
       LCARS.pill(
         label: LCARS.fit(label, 30),
         fill: choice_fill(color, value in selected),
         height: @choice_h,
+        width: px(w),
         attrs: [Event.on_press({:setup, :toggle_choice, {id, value}})]
       )
     end
   end
 
-  defp choice_pills(_choices, _id, _selected, _color), do: []
+  defp choice_pills(_choices, _id, _selected, _color, _w), do: []
 
   defp choices_status(:loading, _selected), do: "Loading..."
   defp choices_status({:error, message}, _selected), do: message
@@ -439,14 +453,20 @@ defmodule PictureRail.View.SetupPage do
   defp choices_status(_choices, selected), do: "#{length(selected)} selected"
 
   defp reload_pill(_id, :loading, color),
-    do: LCARS.pill(label: "LOAD", fill: Theme.color(Theme.dim(color)), height: 64, width: px(160))
+    do:
+      LCARS.pill(
+        label: "LOAD",
+        fill: Theme.color(Theme.dim(color)),
+        height: 64,
+        width: px(@control_w)
+      )
 
   defp reload_pill(id, choices, color) do
     LCARS.pill(
       label: if(match?({:ok, _}, choices), do: "RELOAD", else: "LOAD"),
       fill: Theme.color(color),
       height: 64,
-      width: px(160),
+      width: px(@control_w),
       attrs: [Event.on_press({:setup, :load_choices, id})]
     )
   end
@@ -462,7 +482,7 @@ defmodule PictureRail.View.SetupPage do
             if(setup.saving?, do: Theme.dim(Theme.hex(:orange)), else: Theme.hex(:orange))
           ),
         height: 72,
-        width: px(180),
+        width: px(@control_w),
         attrs: if(setup.saving?, do: [], else: [Event.on_press({:setup, :save, nil})])
       )
 
@@ -473,7 +493,7 @@ defmodule PictureRail.View.SetupPage do
             label: if(setup.check == :running, do: "TESTING", else: "TEST"),
             color: Theme.hex(:bluey),
             height: 72,
-            width: px(180),
+            width: px(@control_w),
             attrs: [Event.on_press({:setup, :test, nil})]
           )
         ]
@@ -486,7 +506,7 @@ defmodule PictureRail.View.SetupPage do
         label: "DISCARD",
         color: Theme.hex(:mauve),
         height: 72,
-        width: px(180),
+        width: px(@control_w),
         attrs: [Event.on_press({:setup, :discard, nil})]
       )
 
@@ -692,10 +712,15 @@ defmodule PictureRail.View.SetupPage do
       font: 40,
       fill: Theme.color(if(enabled?, do: color, else: Theme.dim(color))),
       height: 64,
-      width: px(90),
+      width: px(@control_w),
       attrs: if(enabled?, do: [Event.on_press(message)], else: [])
     )
   end
+
+  # A list pill's width: a column of `per_row`, so a short last row
+  # doesn't stretch.
+  defp column_w(ctx, per_row),
+    do: Float.floor((ctx.content_w - (per_row - 1) * @row_gap) / per_row)
 
   defp choice_fill(color, true), do: Theme.color(color)
   defp choice_fill(color, false), do: Theme.color(Theme.dim(color))
