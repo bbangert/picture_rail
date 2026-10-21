@@ -89,27 +89,65 @@ defmodule PictureRail.Web.RouterTest do
   test "a wrong code is refused", ctx do
     page = request(ctx, :get, "/")
     code = Pairing.code(ctx.pairing)
-    wrong = if code == "000000", do: "000001", else: "000000"
+    wrong = if code == "00000000", do: "00000001", else: "00000000"
     conn = request(ctx, :post, "/pair", %{"_csrf_token" => csrf(page), "code" => wrong}, page)
     assert conn.resp_body =~ "That code isn't right"
     assert redirected_to(request(ctx, :get, "/settings/display", nil, conn)) == "/"
   end
 
-  test "the QR link pairs, and the code is used up", ctx do
+  test "the QR link fills the code in; Pair pairs, once", ctx do
     code = Pairing.code(ctx.pairing)
-    conn = request(ctx, :get, "/pair?code=#{code}")
+    form = request(ctx, :get, "/pair?code=#{code}")
+    assert form.status == 200
+    assert form.resp_body =~ ~s{value="#{code}"}
+    # opening the link (a link preview, say) doesn't use the code up
+    assert Pairing.code(ctx.pairing) == code
+    assert redirected_to(request(ctx, :get, "/settings/display", nil, form)) == "/"
+
+    params = %{"_csrf_token" => csrf(form), "code" => code}
+    conn = request(ctx, :post, "/pair", params, form)
     assert redirected_to(conn) == "/"
 
     index = request(ctx, :get, "/", nil, conn)
     assert index.resp_body =~ "/settings/photo_source"
     assert index.resp_body =~ "Wi-Fi is set on the frame"
 
-    # (one time in a million the new code is the same)
+    # (one time in 10^8 the new code is the same)
     if Pairing.code(ctx.pairing) != code do
-      again = request(ctx, :get, "/pair?code=#{code}")
-      assert again.status == 200
+      again = request(ctx, :post, "/pair", params, form)
       assert again.resp_body =~ "That code isn't right"
     end
+  end
+
+  test "pairing needs the CSRF token: another site can't post guesses", ctx do
+    code = Pairing.code(ctx.pairing)
+    conn = request(ctx, :post, "/pair", %{"code" => code})
+    assert conn.status == 403
+    # not even counted as a try
+    assert Pairing.code(ctx.pairing) == code
+    assert :sys.get_state(ctx.pairing).failures == 0
+  end
+
+  test "only the frame's own name or an address", ctx do
+    {:ok, hostname} = :inet.gethostname()
+
+    for host <- ["#{hostname}.local", "#{hostname}.local:4080", "192.168.1.40", "[::1]:4080"] do
+      assert Router.allowed_host?(host), host
+    end
+
+    for host <- ["rebind.example.com", "rebind.example.com:80", "#{hostname}.local.evil", ""] do
+      refute Router.allowed_host?(host), host
+    end
+
+    # as Bandit passes it on (Plug.Test only sets conn.host, which isn't read)
+    conn = conn(:get, "/")
+
+    conn =
+      %{conn | req_headers: [{"host", "rebind.example.com"} | conn.req_headers]}
+      |> Router.call(Router.init(pairing: ctx.pairing, watcher: ctx.watcher))
+
+    assert conn.status == 421
+    refute conn.resp_body =~ "_csrf_token"
   end
 
   test "forgetting paired devices ends the session", ctx do
@@ -136,8 +174,10 @@ defmodule PictureRail.Web.RouterTest do
       "shown" => ["slideshow/interval_ms"]
     }
 
-    assert redirected_to(request(ctx, :post, "/settings/display", params, conn)) == "/"
+    assert request(ctx, :post, "/settings/display", params, conn).status == 403
     refute File.exists?(ctx.path)
+    # still paired: the session wasn't touched
+    assert request(ctx, :get, "/settings/display", nil, conn).status == 200
   end
 
   test "saving Home Assistant: the token is stored and never sent back", ctx do
@@ -249,6 +289,39 @@ defmodule PictureRail.Web.RouterTest do
     assert result.resp_body =~ "Connection works"
     refute result.resp_body =~ "secret-key"
     refute File.exists?(ctx.path)
+  end
+
+  test "Test against another server needs the key again; it isn't sent there", ctx do
+    :ok = Watcher.update(%{"photo_source" => @immich}, ctx.watcher)
+    conn = paired(ctx)
+    test = self()
+
+    Req.Test.stub(PictureRail.Immich.Source, fn conn ->
+      send(test, {:request, conn.host, Plug.Conn.get_req_header(conn, "x-api-key")})
+      Req.Test.json(conn, [])
+    end)
+
+    page = request(ctx, :get, "/settings/photo_source", nil, conn)
+    assert_receive {:request, "photos.example.com", ["secret-key"]}
+
+    params = %{
+      "_csrf_token" => csrf(page),
+      "type" => "immich",
+      "f" => %{"photo_source" => %{"url" => "http://attacker.example", "api_key" => ""}},
+      "shown" => ["photo_source/url", "photo_source/api_key"]
+    }
+
+    tested =
+      request(ctx, :post, "/settings/photo_source", Map.put(params, "action", "test"), page)
+
+    assert tested.resp_body =~ "API key must be entered again for a new server"
+    refute_received {:request, "attacker.example", _}
+
+    saved = request(ctx, :post, "/settings/photo_source", Map.put(params, "action", "save"), page)
+    assert saved.status == 422
+    assert saved.resp_body =~ "must be entered again for a new server"
+    assert saved(ctx)["photo_source"]["url"] == @immich["url"]
+    refute_received {:request, "attacker.example", _}
   end
 
   test "unknown pages", ctx do

@@ -72,5 +72,13 @@ defmodule PictureRail.App.PanelTest do
     assert Panel.timeout_ms(%{stack: [{:setup, 0}]}, deps) == 300_000
     assert Panel.timeout_ms(setup, %{deps | setup: %{busy?: false}}) == 30_000
     assert Panel.timeout_ms(%{stack: []}, deps) == 30_000
+
+    # busy only once the timer was set (first boot opens Setup with the
+    # panel): checked again when the time is up
+    idle = %{settings: deps.settings, setup: %{busy?: false}}
+    state = Panel.goto({:setup, :wifi}, Panel.init(nil, idle), idle)
+    state = Panel.timed_out(state.token, state, deps)
+    assert exposed(state).visible?
+    assert exposed(Panel.timed_out(state.token, state, idle)).visible? == false
   end
 end

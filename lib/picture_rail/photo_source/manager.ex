@@ -12,7 +12,7 @@ defmodule PictureRail.PhotoSource.Manager do
 
   require Logger
 
-  alias PictureRail.Settings
+  alias PictureRail.{PhotoSource, Settings}
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -26,13 +26,23 @@ defmodule PictureRail.PhotoSource.Manager do
 
   @impl GenServer
   def init(opts) do
+    registry = Keyword.fetch!(opts, :registry)
+
+    # Restarted alone (`:rest_for_one`, last): the source it started is
+    # still running, under the same registry.
+    running =
+      case PhotoSource.active(registry) do
+        {_pid, module} -> module
+        nil -> nil
+      end
+
     state = %{
-      registry: Keyword.fetch!(opts, :registry),
+      registry: registry,
       sources: Keyword.fetch!(opts, :sources),
       settings_fun: Keyword.get(opts, :settings, &Settings.current/0),
       app: Keyword.get(opts, :app, PictureRail.App),
       app_monitor: nil,
-      running: nil
+      running: running
     }
 
     {:ok, state, {:continue, :start}}
@@ -109,6 +119,12 @@ defmodule PictureRail.PhotoSource.Manager do
         do: DynamicSupervisor.terminate_child(state.sources, pid)
 
     Logger.info("Photo source: stopped #{state.running.label()}")
+
+    # a stopped source reports nothing more: say so, or its last status
+    # stays on the screen
+    if state.app && Process.whereis(state.app),
+      do: Solve.dispatch(state.app, :photos, :stats, PhotoSource.unconfigured_stats())
+
     %{state | running: nil}
   end
 end

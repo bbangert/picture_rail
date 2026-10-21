@@ -75,7 +75,7 @@ defmodule PictureRail.PhotoSourceTest do
       PhotoSource.Supervisor.refresh(name)
     end
 
-    %{set: set, registry: registry}
+    %{set: set, registry: registry, sup: name, manager: Module.concat(name, PhotoSource.Manager)}
   end
 
   test "nothing configured: no photo, unconfigured stats", %{registry: registry} do
@@ -111,6 +111,33 @@ defmodule PictureRail.PhotoSourceTest do
     set.(Settings.defaults())
     assert PhotoSource.active(registry) == nil
     assert PhotoSource.next(registry) == :none
+  end
+
+  test "a restarted manager takes over the running source", %{
+    set: set,
+    registry: registry,
+    sup: sup,
+    manager: manager
+  } do
+    set.(source(FakeSource, "a"))
+    {pid, FakeSource} = PhotoSource.active(registry)
+
+    manager_pid = Process.whereis(manager)
+    ref = Process.monitor(manager_pid)
+    Process.exit(manager_pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^manager_pid, :killed}
+    # the supervisor has handled the exit, and started a new one
+    assert {_, new_pid, _, _} =
+             List.keyfind(Supervisor.which_children(sup), PhotoSource.Manager, 0)
+
+    assert is_pid(new_pid) and new_pid != manager_pid
+
+    # the same source, kept; then swapped as usual
+    set.(source(FakeSource, "b"))
+    assert {^pid, FakeSource} = PhotoSource.active(registry)
+    set.(source(OtherSource, "c"))
+    assert {_other, OtherSource} = PhotoSource.active(registry)
+    refute Process.alive?(pid)
   end
 
   test "module lookup by type" do

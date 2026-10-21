@@ -222,9 +222,12 @@ defmodule PictureRail.View.SetupPage do
 
   # -- Settings on your phone --
 
-  @doc ~s{A pairing code as the frame shows it: `"123 456"`.}
+  @doc ~s{A pairing code as the frame shows it, in two halves: `"1234 5678"`.}
   @spec code(String.t()) :: String.t()
-  def code(code), do: String.slice(code, 0, 3) <> " " <> String.slice(code, 3, 3)
+  def code(code) do
+    {first, second} = String.split_at(code, div(String.length(code), 2))
+    first <> " " <> second
+  end
 
   # While connected: a QR code of the web page's pairing link (`Web`), its
   # address by name and the code to type there, and forgetting the

@@ -79,16 +79,28 @@ defmodule PictureRail.SetupTest do
              ~w(cache live_photo panel slideshow)
   end
 
-  test "the config to try a draft with fills in the stored secret" do
+  test "the config to try a draft with fills in the stored secret, for the same server" do
     draft = Setup.draft(:photo_source, public(@immich))
     stored = Map.put(@immich["photo_source"], "album_ids", ["old"])
-    config = Setup.source_config(Map.put(draft, {"photo_source", "url"}, "http://new"), stored)
+    assert {:ok, config} = Setup.source_config(draft, stored)
     assert config["api_key"] == "secret-key"
-    assert config["url"] == "http://new"
     assert config["album_ids"] == ["a1"]
 
-    assert Setup.source_config(draft, %{"type" => "other", "api_key" => "k"})["api_key"] == nil
-    assert Setup.source_config(draft, nil)["api_key"] == nil
+    # another server: the key has to be typed again
+    moved = Map.put(draft, {"photo_source", "url"}, "http://attacker")
+
+    assert Setup.source_config(moved, stored) ==
+             {:error, "API key must be entered again for a new server"}
+
+    retyped = Map.put(moved, {"photo_source", "api_key"}, %Secret{value: "typed"})
+
+    assert {:ok, %{"api_key" => "typed", "url" => "http://attacker"}} =
+             Setup.source_config(retyped, stored)
+
+    for stored <- [%{"type" => "other", "api_key" => "k"}, nil] do
+      assert {:ok, config} = Setup.source_config(draft, stored)
+      refute Map.has_key?(config, "api_key")
+    end
   end
 
   test "steps stay within the field's bounds" do

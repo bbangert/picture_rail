@@ -24,6 +24,10 @@ defmodule PictureRail.Setup.Field do
   Fields with `ui?: false` are read from the file but never shown (older
   keys kept for files edited by hand).
 
+  A stored secret is only ever sent to the server it was given for: see
+  `same_server?/3`. A toggle with `secures?: true` (checking the server's
+  certificate) counts as part of the server.
+
   For the text types, `max` is the most characters the Setup page lets you
   type (512 when unset); it isn't checked in the file.
   """
@@ -39,7 +43,8 @@ defmodule PictureRail.Setup.Field do
     min: nil,
     max: nil,
     step: nil,
-    ui?: true
+    ui?: true,
+    secures?: false
   ]
 
   @type type :: :url | :text | :secret | :toggle | :integer | :seconds | {:choices, :multi}
@@ -54,7 +59,8 @@ defmodule PictureRail.Setup.Field do
           min: integer() | nil,
           max: integer() | nil,
           step: pos_integer() | nil,
-          ui?: boolean()
+          ui?: boolean(),
+          secures?: boolean()
         }
 
   @doc """
@@ -127,6 +133,38 @@ defmodule PictureRail.Setup.Field do
   @spec max_length(t()) :: pos_integer()
   def max_length(%__MODULE__{max: max}) when is_integer(max), do: max
   def max_length(%__MODULE__{}), do: 512
+
+  @doc """
+  Whether a section's `new` values still point at the server its `old`
+  ones did, so that stored secrets may go along: every `:url` field keeps
+  its scheme, host and port, and no `secures?` toggle is turned off.
+  Changing the server means typing the secrets again, so that whoever can
+  change the URL can't have the frame send a stored key elsewhere.
+  """
+  @spec same_server?([t()], map(), map()) :: boolean()
+  def same_server?(fields, old, new) do
+    Enum.all?(fields, fn
+      %__MODULE__{type: :url, key: key} ->
+        origin(old[key]) == origin(new[key])
+
+      %__MODULE__{type: :toggle, secures?: true, key: key, default: default} ->
+        not (Map.get(old, key, default) == true and Map.get(new, key, default) == false)
+
+      _field ->
+        true
+    end)
+  end
+
+  defp origin(url) when is_binary(url) do
+    uri = url |> String.trim() |> URI.parse()
+    {uri.scheme && String.downcase(uri.scheme), uri.host && String.downcase(uri.host), uri.port}
+  end
+
+  defp origin(_url), do: nil
+
+  @doc "What a kept secret needs when the server changes."
+  @spec retype() :: String.t()
+  def retype, do: "must be entered again for a new server"
 
   @doc "The keys of the secret fields."
   @spec secret_keys([t()]) :: [String.t()]

@@ -95,6 +95,26 @@ defmodule PictureRail.Setup.FieldTest do
              {:error, ["s.ids must be a list of strings"]}
   end
 
+  test "the same server: scheme, host and port, and the certificate check left on" do
+    fields = [
+      %Field{key: "url", label: "URL", type: :url},
+      %Field{key: "verify", label: "Verify", type: :toggle, default: true, secures?: true},
+      %Field{key: "on", label: "On", type: :toggle, default: true}
+    ]
+
+    old = %{"url" => "https://ha.local:8123"}
+    assert Field.same_server?(fields, old, %{"url" => "https://HA.local:8123/api", "on" => false})
+    assert Field.same_server?(fields, old, Map.put(old, "verify", true))
+    refute Field.same_server?(fields, old, %{"url" => "http://ha.local:8123"})
+    refute Field.same_server?(fields, old, %{"url" => "https://ha.local:8124"})
+    refute Field.same_server?(fields, old, %{"url" => "https://evil.local:8123"})
+    refute Field.same_server?(fields, old, %{"url" => nil})
+    refute Field.same_server?(fields, old, Map.put(old, "verify", false))
+    # already off: leaving it off isn't a change
+    off = Map.put(old, "verify", false)
+    assert Field.same_server?(fields, off, off)
+  end
+
   test "secret keys, and the public copy that says whether each is set" do
     assert Field.secret_keys(@fields) == ["key"]
 

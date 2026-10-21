@@ -35,6 +35,7 @@ defmodule PictureRail.Settings.Sections do
         label: "Check the certificate",
         type: :toggle,
         default: true,
+        secures?: true,
         help: "Turn off for a self-signed certificate"
       }
     ]

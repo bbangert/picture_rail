@@ -115,7 +115,7 @@ defmodule PictureRail.Settings.WatcherTest do
                Watcher.update(
                  %{
                    "photo_source" => %{"api_key" => "", "album_ids" => ["a2"]},
-                   "home_assistant" => %{"url" => "http://ha2", "token" => nil},
+                   "home_assistant" => %{"url" => "http://ha/", "token" => nil},
                    "slideshow" => %{"interval_ms" => 9_000}
                  },
                  watcher
@@ -131,10 +131,49 @@ defmodule PictureRail.Settings.WatcherTest do
                "extra" => 1
              }
 
-      assert json["home_assistant"] == %{"url" => "http://ha2", "token" => "secret-token"}
+      assert json["home_assistant"] == %{"url" => "http://ha/", "token" => "secret-token"}
       assert json["slideshow"] == %{"interval_ms" => 9_000}
       assert json["future"] == %{"x" => true}
       assert Watcher.current(watcher).slideshow.interval_ms == 9_000
+    end
+
+    test "a kept secret goes only to the server it was given for", %{tmp_dir: dir} do
+      path = Path.join(dir, "picture_rail.json")
+
+      saved = %{
+        "photo_source" => @immich,
+        "home_assistant" => %{"url" => "https://ha:8123", "token" => "secret-token"}
+      }
+
+      write(path, saved)
+      watcher = start(path)
+      assert_receive {:notified, _, :ok}
+
+      # another host, port or scheme, or the certificate check turned off
+      for {name, values, key} <- [
+            {"photo_source", %{"url" => "http://attacker", "api_key" => ""}, "api_key"},
+            {"home_assistant", %{"url" => "https://ha:8124"}, "token"},
+            {"home_assistant", %{"url" => "http://ha:8123", "token" => nil}, "token"},
+            {"home_assistant", %{"ssl_verify" => false}, "token"}
+          ] do
+        assert {:error, [message]} = Watcher.update(%{name => values}, watcher)
+        assert message == "#{name}.#{key} must be entered again for a new server"
+      end
+
+      assert path |> File.read!() |> Jason.decode!() == saved
+
+      # the same server (path and case aside), or the secret given again
+      assert :ok = Watcher.update(%{"home_assistant" => %{"url" => "https://HA:8123/x"}}, watcher)
+
+      assert :ok =
+               Watcher.update(
+                 %{"photo_source" => %{"url" => "http://new", "api_key" => "new-key"}},
+                 watcher
+               )
+
+      json = path |> File.read!() |> Jason.decode!()
+      assert json["home_assistant"]["token"] == "secret-token"
+      assert json["photo_source"]["api_key"] == "new-key"
     end
 
     test "a nil section is removed, a nil key goes back to its default", %{tmp_dir: dir} do

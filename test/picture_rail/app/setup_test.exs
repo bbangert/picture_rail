@@ -83,15 +83,16 @@ defmodule PictureRail.App.SetupTest do
   end
 
   test "opening the photo source loads its choices with the stored credentials" do
+    # before opening: the load starts at once
+    Req.Test.stub(PictureRail.Immich.Source, fn conn ->
+      Req.Test.json(conn, [%{"id" => "a1", "albumName" => "Frame", "assetCount" => 2}])
+    end)
+
     deps = deps(%{"photo_source" => @immich})
     state = open(:photo_source, deps, callbacks())
     id = {"photo_source", "album_ids"}
     assert state.choices[id] == :loading
     assert exposed(state, deps).busy?
-
-    Req.Test.stub(PictureRail.Immich.Source, fn conn ->
-      Req.Test.json(conn, [%{"id" => "a1", "albumName" => "Frame", "assetCount" => 2}])
-    end)
 
     state = settle(state)
     assert_received {:stored, "photo_source"}
@@ -189,6 +190,8 @@ defmodule PictureRail.App.SetupTest do
   end
 
   test "nothing typed stays out of what's exposed" do
+    # opening loads the albums: something has to answer
+    Req.Test.stub(PictureRail.Immich.Source, fn conn -> Req.Test.json(conn, []) end)
     deps = deps(%{"photo_source" => @immich})
     state = %{open(:photo_source, deps, callbacks()) | pending: %{}}
     state = Controller.set({{"photo_source", "api_key"}, %Secret{value: "typed-key"}}, state)

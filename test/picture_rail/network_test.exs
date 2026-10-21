@@ -76,6 +76,8 @@ defmodule PictureRail.NetworkTest do
     test "a network that holds a connection is kept and saved", %{net: net} do
       assert :ok = Network.join("Home", "goodpassword", false, net)
       assert %{trial: %{ssid: "Home"}} = Network.status(net)
+      # the old network's password stays out of a crash report
+      refute inspect(:sys.get_state(net)) =~ "oldpassword"
       connected("Home")
 
       assert await_result() == {:connected, "Home"}
@@ -115,6 +117,19 @@ defmodule PictureRail.NetworkTest do
       assert await_result() == {:failed, :timeout, "Far"}
       assert Fake.get_configuration().ssid == "Old"
       refute :persist in Fake.calls()
+    end
+
+    test "a connection that drops and comes back has to hold again", %{net: net} do
+      assert :ok = Network.join("Home", "goodpassword", false, net)
+      connected("Home")
+      Fake.send_event({:connection, :disconnected})
+      # back before the first connection's hold (50 ms) is up
+      Process.sleep(20)
+      back = System.monotonic_time(:millisecond)
+      Fake.send_event({:connection, :lan})
+
+      assert await_result() == {:connected, "Home"}
+      assert System.monotonic_time(:millisecond) - back >= 50
     end
 
     test "a connection that drops before it has held doesn't count", %{net: net} do
@@ -174,6 +189,9 @@ defmodule PictureRail.NetworkTest do
       assert scans >= 2
 
       assert :ok = Network.join("Home", "goodpassword", false, net)
+      # counted once the join is in: a scan already on its way may land first
+      _ = :sys.get_state(net)
+      scans = Enum.count(Fake.calls(), &(&1 == :scan))
       Process.sleep(100)
       assert Enum.count(Fake.calls(), &(&1 == :scan)) == scans
     end

@@ -278,12 +278,7 @@ defmodule PictureRail.App.Setup do
         state
 
       module ->
-        draft = state.draft
-
-        fun = fn ->
-          module.check(Setup.source_config(draft, callbacks.stored.("photo_source")))
-        end
-
+        fun = with_source_config(state.draft, callbacks, &module.check/1)
         %{run(state, :check, fun, callbacks) | check: :running}
     end
   end
@@ -352,18 +347,22 @@ defmodule PictureRail.App.Setup do
         state
 
       module ->
-        draft = state.draft
-
-        fun = fn ->
-          module.choices(key, Setup.source_config(draft, callbacks.stored.("photo_source")))
-        end
-
+        fun = with_source_config(state.draft, callbacks, &module.choices(key, &1))
         state = run(state, {:choices, id}, fun, callbacks)
         %{state | choices: Map.put(state.choices, id, :loading)}
     end
   end
 
   defp start_choices(state, _id, _callbacks), do: state
+
+  # A job for the task: `fun` on the settings to try the draft with, or
+  # the reason there are none (a stored key for another server).
+  defp with_source_config(draft, callbacks, fun) do
+    fn ->
+      with {:ok, config} <- Setup.source_config(draft, callbacks.stored.("photo_source")),
+           do: fun.(config)
+    end
+  end
 
   defp run(state, job, fun, callbacks) do
     %{ref: ref} = callbacks.run.(fun)

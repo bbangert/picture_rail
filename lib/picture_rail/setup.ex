@@ -242,13 +242,30 @@ defmodule PictureRail.Setup do
   The photo source settings to try a draft with (Test, loading choices):
   the draft over the stored ones (`PictureRail.Settings.values/2`, with
   credentials), so a secret that wasn't retyped is the stored one. Another
-  type than the stored one starts from nothing.
+  type than the stored one starts from nothing, and a stored secret isn't
+  sent to another server (`PictureRail.Setup.Field.same_server?/3`): that
+  needs it typed again.
   """
-  @spec source_config(draft(), map() | nil) :: map()
+  @spec source_config(draft(), map() | nil) :: {:ok, map()} | {:error, String.t()}
   def source_config(draft, stored) do
     stored = if stored && stored["type"] == draft[type_id()], do: stored, else: %{}
-    Map.merge(stored, values(:photo_source, draft)["photo_source"])
+    typed = values(:photo_source, draft)["photo_source"]
+    config = Map.merge(stored, typed)
+    fields = Enum.map(fields(:photo_source, draft), &elem(&1, 1))
+
+    kept =
+      for %Field{type: :secret} = f <- fields,
+          Map.has_key?(stored, f.key),
+          not Map.has_key?(typed, f.key),
+          do: f
+
+    case kept do
+      [f | _] -> if Field.same_server?(fields, stored, config), do: {:ok, config}, else: retype(f)
+      [] -> {:ok, config}
+    end
   end
+
+  defp retype(%Field{label: label}), do: {:error, "#{label} #{Field.retype()}"}
 
   @doc "Step an `:integer` or `:seconds` value by one `step` up (`1`) or down (`-1`)."
   @spec step(Field.t(), integer() | nil, 1 | -1) :: integer()

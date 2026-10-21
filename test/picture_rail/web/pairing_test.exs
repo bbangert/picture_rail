@@ -21,14 +21,22 @@ defmodule PictureRail.Web.PairingTest do
   end
 
   defp wrong(code),
-    do: code |> String.to_integer() |> Kernel.+(1) |> rem(1_000_000) |> to_string()
+    do:
+      code
+      |> String.to_integer()
+      |> Kernel.+(1)
+      |> rem(100_000_000)
+      |> Integer.to_string()
+      |> String.pad_leading(8, "0")
 
-  test "a 6-digit code; the right one pairs once, then there's a new one", %{tmp_dir: dir} do
+  test "an 8-digit code; the right one pairs once, then there's a new one", %{tmp_dir: dir} do
     pairing = start(dir)
     code = Pairing.code(pairing)
-    assert code =~ ~r/^\d{6}$/
+    assert code =~ ~r/^\d{8}$/
 
-    assert Pairing.verify(" #{code} ", pairing) == :ok
+    # as the frame shows it, in two halves
+    {first, second} = String.split_at(code, 4)
+    assert Pairing.verify(" #{first} #{second} ", pairing) == :ok
     assert_receive {:code, new}
     assert new == Pairing.code(pairing)
     # (one time in a million the new code is the same)
@@ -54,6 +62,35 @@ defmodule PictureRail.Web.PairingTest do
     for _ <- 1..5, do: Pairing.verify(wrong(code), pairing)
     assert_receive {:code, new}
     assert Pairing.verify(new, pairing) == :ok
+  end
+
+  test "forgetting devices lifts a lockout", %{tmp_dir: dir} do
+    pairing = start(dir)
+    code = Pairing.code(pairing)
+    for _ <- 1..5, do: Pairing.verify(wrong(code), pairing)
+    assert_receive {:code, new}
+    assert Pairing.verify(new, pairing) == {:error, :locked}
+
+    :ok = Pairing.forget(pairing)
+    assert_receive {:code, after_forget}
+    assert Pairing.verify(after_forget, pairing) == :ok
+  end
+
+  test "lockouts start over after a quiet spell, counted from the lockout's end", %{
+    tmp_dir: dir
+  } do
+    # a lockout that ends at once, and a quiet spell of 50 ms
+    pairing = start(dir, lockout_ms: 0, quiet_ms: 50)
+    rounds = fn -> :sys.get_state(pairing).rounds end
+
+    for _ <- 1..5, do: Pairing.verify(wrong(Pairing.code(pairing)), pairing)
+    assert rounds.() == 1
+    for _ <- 1..5, do: Pairing.verify(wrong(Pairing.code(pairing)), pairing)
+    assert rounds.() == 2
+
+    Process.sleep(60)
+    Pairing.verify(wrong(Pairing.code(pairing)), pairing)
+    assert rounds.() == 0
   end
 
   test "the code changes by itself", %{tmp_dir: dir} do

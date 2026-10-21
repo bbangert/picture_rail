@@ -33,6 +33,7 @@ defmodule PictureRail.Network do
   require Logger
 
   alias PictureRail.Network.Backend
+  alias PictureRail.Setup.Secret
 
   @held_ms 3_000
   @trial_ms 30_000
@@ -96,7 +97,7 @@ defmodule PictureRail.Network do
   @spec join(String.t(), String.t() | nil, boolean(), GenServer.server()) ::
           :ok | {:error, String.t()}
   def join(ssid, password, hidden? \\ false, server \\ __MODULE__),
-    do: GenServer.call(server, {:join, ssid, password, hidden?})
+    do: GenServer.call(server, {:join, ssid, %Secret{value: password}, hidden?})
 
   @doc "Someone is looking at the networks: scan now, and every 20 s for a while."
   @spec watch(GenServer.server()) :: :ok
@@ -136,7 +137,7 @@ defmodule PictureRail.Network do
   @impl GenServer
   def handle_call(:status, _from, state), do: {:reply, report_of(state), state}
 
-  def handle_call({:join, ssid, password, hidden?}, _from, state) do
+  def handle_call({:join, ssid, %Secret{value: password}, hidden?}, _from, state) do
     backend = state.backend
 
     cond do
@@ -160,9 +161,13 @@ defmodule PictureRail.Network do
   @impl GenServer
   def handle_info(:scan, state), do: {:noreply, scan(%{state | scan_timer: nil})}
 
+  # Sent when a connection came up; one that dropped and came back since
+  # has its own on the way, and has to hold for as long.
   def handle_info({:held, ref}, %{trial: %{ref: ref, ok_since: since}} = state)
       when since != nil do
-    {:noreply, commit(state)}
+    if now() - since >= state.held_ms,
+      do: {:noreply, commit(state)},
+      else: {:noreply, state}
   end
 
   def handle_info({:trial_timeout, ref}, %{trial: %{ref: ref}} = state),
@@ -234,7 +239,8 @@ defmodule PictureRail.Network do
           ssid: ssid,
           ref: ref,
           started_at: started_at,
-          previous: previous,
+          # its password stays out of crash reports
+          previous: %Secret{value: previous},
           ok_since: nil,
           dropped?: false,
           wrong_key?: false
@@ -247,8 +253,10 @@ defmodule PictureRail.Network do
     end
   end
 
+  # Not the term itself: a configuration error can carry the configuration.
   defp describe(reason) when is_binary(reason), do: reason
-  defp describe(reason), do: inspect(reason)
+  defp describe(reason) when is_atom(reason), do: "Couldn't set up the network (#{reason})"
+  defp describe(_reason), do: "Couldn't set up the network"
 
   defp check_trial(%{trial: nil} = state), do: state
   defp check_trial(%{trial: %{wrong_key?: true}} = state), do: revert(state, :wrong_password)
@@ -292,9 +300,12 @@ defmodule PictureRail.Network do
   defp revert(%{trial: trial} = state, reason) do
     Logger.warning("Network: #{inspect(trial.ssid)} failed (#{reason}), going back")
 
-    case state.backend.configure(trial.previous) do
-      :ok -> :ok
-      error -> Logger.error("Network: couldn't put the previous network back: #{inspect(error)}")
+    case state.backend.configure(trial.previous.value) do
+      :ok ->
+        :ok
+
+      {:error, error} ->
+        Logger.error("Network: couldn't put the previous network back: #{describe(error)}")
     end
 
     report(%{state | trial: nil, result: {:failed, reason, trial.ssid}})

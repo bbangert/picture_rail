@@ -5,20 +5,26 @@ defmodule PictureRail.Web.Router do
   instead of typing them on the frame.
 
     * `GET /` - the sections, or the pairing form when not paired
-    * `GET /pair?code=` (the frame's QR code links here), `POST /pair`
+    * `GET /pair?code=` (the frame's QR code links here): the pairing form
+      with the code filled in; only `POST /pair` checks it, so a link
+      preview can't use the code up
     * `GET /settings/:section`, `POST /settings/:section` (`action`
       `save`, or `test` for the photo source)
     * `POST /logout`
 
   Everything but pairing needs a session from `PictureRail.Web.Pairing`
-  (a signed cookie, 12 hours). Posts need the CSRF token: a post without
-  it is handled with the session cleared, so it bounces to pairing.
+  (a signed cookie, 12 hours). Posts need the CSRF token, pairing too, so
+  another site can't post guesses from a browser on the LAN: a post
+  without it gets a 403. Requests for any host but the frame's own name or
+  an IP address are refused (421), so a site can't reach the page by
+  pointing its own name at the frame (DNS rebinding).
   Saves go through `PictureRail.Settings.Watcher.update/2`, as the
   frame's do; secrets are never sent back. Wi-Fi isn't here: changing it
   from the network you're on would cut the page off.
 
   Redirects are paths only, and nothing uses `conn.host` (a client can
-  choose it: EEF-CVE-2026-105660 in Bandit 1.12.5).
+  choose it: EEF-CVE-2026-105660 in Bandit 1.12.5): the host check reads
+  the raw `host` header.
 
   Options (for tests): `pairing:` and `watcher:` servers.
   """
@@ -29,7 +35,9 @@ defmodule PictureRail.Web.Router do
   alias PictureRail.Web.{Form, Page, Pairing}
 
   @session_s 12 * 3600
+  @csrf Plug.CSRFProtection.init(with: :exception)
 
+  plug(:check_host)
   plug(:put_secret_key_base)
 
   plug(Plug.Session,
@@ -43,7 +51,7 @@ defmodule PictureRail.Web.Router do
 
   plug(:fetch_session)
   plug(Plug.Parsers, parsers: [:urlencoded], length: 100_000)
-  plug(Plug.CSRFProtection, with: :clear_session)
+  plug(:check_csrf)
   plug(:put_headers)
   plug(:match)
   plug(:dispatch)
@@ -55,10 +63,8 @@ defmodule PictureRail.Web.Router do
   end
 
   get "/pair" do
-    case conn.params["code"] do
-      code when is_binary(code) and code != "" -> pair(conn, code)
-      _ -> html(conn, 200, Page.pair(csrf(), nil))
-    end
+    code = if is_binary(conn.params["code"]), do: conn.params["code"]
+    html(conn, 200, Page.pair(csrf(), nil, code))
   end
 
   post "/pair" do
@@ -150,9 +156,12 @@ defmodule PictureRail.Web.Router do
           {:error, "Unknown photo source"}
 
         module ->
-          config = Setup.source_config(draft, Settings.values(settings, "photo_source"))
+          result =
+            with {:ok, config} <-
+                   Setup.source_config(draft, Settings.values(settings, "photo_source")),
+                 do: module.check(config)
 
-          case module.check(config) do
+          case result do
             :ok -> {:ok, retype("Connection works", draft)}
             {:error, text} -> {:error, retype(text, draft)}
           end
@@ -202,6 +211,47 @@ defmodule PictureRail.Web.Router do
   defp choices(_section, _draft, _settings), do: %{}
 
   # -- Plumbing --
+
+  # The frame by name (`<hostname>.local`) or by address; no Host header
+  # (HTTP/1.0) is let through, as a browser always sends one.
+  defp check_host(conn, _opts) do
+    case get_req_header(conn, "host") do
+      [] ->
+        conn
+
+      [host | _] ->
+        if allowed_host?(host),
+          do: conn,
+          else:
+            conn
+            |> html(421, Page.message("Wrong address", "Open the frame's own address."))
+            |> halt()
+    end
+  end
+
+  @doc false
+  @spec allowed_host?(String.t()) :: boolean()
+  def allowed_host?(host) do
+    name =
+      case host |> String.trim() |> String.downcase() do
+        "[" <> rest -> rest |> String.split("]") |> hd()
+        other -> other |> String.split(":") |> hd()
+      end
+
+    {:ok, hostname} = :inet.gethostname()
+    hostname = String.downcase(to_string(hostname))
+
+    name in [hostname, hostname <> ".local", "localhost"] or
+      match?({:ok, _}, :inet.parse_strict_address(String.to_charlist(name)))
+  end
+
+  defp check_csrf(conn, _opts) do
+    Plug.CSRFProtection.call(conn, @csrf)
+  rescue
+    Plug.CSRFProtection.InvalidCSRFTokenError ->
+      text = "This page was open too long, or came from somewhere else. Go back and try again."
+      conn |> html(403, Page.message("Try again", text)) |> halt()
+  end
 
   defp server(conn, key), do: Keyword.get(conn.assigns.web, key, default(key))
   defp default(:pairing), do: Pairing

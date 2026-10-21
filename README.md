@@ -132,20 +132,26 @@ file is checked. DISCARD drops the draft.
 Keys and tokens are long to type on the frame, so the frame also serves a
 settings page on your network (port 80, or 4080 on the host):
 `http://<hostname>.local`, advertised over mDNS. While the frame is
-connected, Setup shows a QR code, the address and a 6-digit code beside
+connected, Setup shows a QR code, the address and an 8-digit code beside
 its sections.
 
-- Scanning the QR code pairs the phone: the code is in the link.
+- Scanning the QR code opens the page with the code filled in: tap Pair.
 - In any other browser, open the address and type the code.
 
 Each code pairs one device and then changes; it also changes by itself
 every 30 minutes, and five wrong tries change it and lock pairing for a
-minute (doubling each time, up to an hour). A paired browser stays paired for 12 hours.
-FORGET DEVICES on the frame logs every paired browser out.
+minute (doubling each time, up to an hour; an hour without wrong tries
+starts it over). A paired browser stays paired for 12 hours. FORGET
+DEVICES on the frame logs every paired browser out and lifts a lockout.
+The page only answers to the frame's own name or an IP address, and
+refuses posts from other sites.
 
 The page has the same sections as the frame, apart from Wi-Fi (changing it
 from the network you're on would cut the page off). Keys and tokens are
-never shown back: leave the field empty to keep the saved one. Albums are
+never shown back: leave the field empty to keep the saved one. Changing a
+server's address (or turning off its certificate check) needs its key or
+token entered again, so a saved one is only ever sent to the server it was
+saved for. Albums are
 listed from the saved connection, so on a new frame save the URL and key
 first. The page is plain HTTP on your local network, like the Home
 Assistant connection can be: pair only on a network you trust.

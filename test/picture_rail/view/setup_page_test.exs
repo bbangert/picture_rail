@@ -124,7 +124,7 @@ defmodule PictureRail.View.SetupPageTest do
   end
 
   test "the overview offers the web page while connected: beside the pills, or under them" do
-    assert SetupPage.code("012345") == "012 345"
+    assert SetupPage.code("01234567") == "0123 4567"
 
     connected = %{status: :connected, ip: "192.168.1.40", ssid: "Home"}
 
@@ -132,7 +132,7 @@ defmodule PictureRail.View.SetupPageTest do
       Map.merge(exposed(@immich), %{
         photos: nil,
         network: connected,
-        pairing: %{code: "012345"},
+        pairing: %{code: "01234567"},
         portrait?: false,
         content_w: 1574,
         content_h: 782

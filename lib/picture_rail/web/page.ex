@@ -18,10 +18,11 @@ defmodule PictureRail.Web.Page do
   def h(value), do: value |> to_string() |> Plug.HTML.html_escape()
 
   @doc """
-  The pairing form. `error` is `nil`, `:wrong` or `:locked`.
+  The pairing form. `error` is `nil`, `:wrong` or `:locked`; `code` fills
+  it in (from the frame's QR code).
   """
-  @spec pair(String.t(), :wrong | :locked | nil) :: String.t()
-  def pair(csrf, error), do: layout("Pair", pair_body(csrf, error))
+  @spec pair(String.t(), :wrong | :locked | nil, String.t() | nil) :: String.t()
+  def pair(csrf, error, code \\ nil), do: layout("Pair", pair_body(csrf, error, code))
 
   @doc "The sections, with the log-out button."
   @spec index(String.t()) :: String.t()
@@ -169,17 +170,17 @@ defmodule PictureRail.Web.Page do
     :pair_body,
     ~S"""
     <h1>Pair this device</h1>
-    <p>Open <b>Setup</b> on the frame and enter the code it shows under “Settings on your phone”, or scan its QR code.</p>
+    <%= if code do %><p>Tap <b>Pair</b> to pair this device with the frame.</p><% else %><p>Open <b>Setup</b> on the frame and enter the code it shows under “Settings on your phone”, or scan its QR code.</p><% end %>
     <%= if error == :wrong do %><p class="error">That code isn't right. Check the frame; the code changes after five wrong tries.</p><% end %>
-    <%= if error == :locked do %><p class="error">Too many wrong codes. Wait a minute, then try the code the frame shows.</p><% end %>
+    <%= if error == :locked do %><p class="error">Too many wrong codes. Wait a while, or tap Forget devices on the frame, then try the code it shows.</p><% end %>
     <form method="post" action="/pair">
     <input type="hidden" name="_csrf_token" value="<%= h(csrf) %>">
     <div class="field"><label for="code">Code</label>
-    <input class="code" type="text" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" autofocus></div>
-    <div class="buttons"><button type="submit">Pair</button></div>
+    <input class="code" type="text" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="9"<%= if code do %> value="<%= h(code) %>"<% else %> autofocus<% end %>></div>
+    <div class="buttons"><button type="submit"<%= if code, do: " autofocus" %>>Pair</button></div>
     </form>
     """,
-    [:csrf, :error]
+    [:csrf, :error, :code]
   )
 
   EEx.function_from_string(

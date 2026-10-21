@@ -21,7 +21,7 @@ defmodule PictureRail.Settings.Watcher do
 
   alias PictureRail.{PhotoSource, PrivateFile, Settings}
   alias PictureRail.Settings.Sections
-  alias PictureRail.Setup.Field
+  alias PictureRail.Setup.{Field, Secret}
 
   @poll_ms 10_000
 
@@ -66,7 +66,9 @@ defmodule PictureRail.Settings.Watcher do
   `sections` maps section names to the values to set in them (string
   keys); a `nil` section is removed. Keys left out of a section keep their
   value, and so does a secret given as `""` or `nil` (secrets are never
-  shown, only replaced). A photo source of a different `"type"` replaces
+  shown, only replaced), unless the section now points at another server
+  (`PictureRail.Setup.Field.same_server?/3`): then it has to be given
+  again. A photo source of a different `"type"` replaces
   the old one's settings. Keys and sections this version doesn't know are
   kept, and a legacy `immich` section becomes `photo_source`.
 
@@ -77,7 +79,7 @@ defmodule PictureRail.Settings.Watcher do
   """
   @spec update(%{String.t() => map() | nil}, GenServer.server()) :: :ok | {:error, [String.t()]}
   def update(sections, server \\ __MODULE__) when is_map(sections),
-    do: GenServer.call(server, {:update, sections})
+    do: GenServer.call(server, {:update, %Secret{value: sections}})
 
   @impl GenServer
   def init(opts) do
@@ -116,9 +118,9 @@ defmodule PictureRail.Settings.Watcher do
     {:reply, reply, state}
   end
 
-  def handle_call({:update, sections}, _from, state) do
+  def handle_call({:update, %Secret{value: sections}}, _from, state) do
     with {:ok, current} <- read_json(state.path),
-         merged = merge(current, sections),
+         {:ok, merged} <- merge(current, sections),
          {:ok, _settings} <- Settings.parse(merged),
          :ok <- write(state.path, merged) do
       state = load(state)
@@ -199,9 +201,15 @@ defmodule PictureRail.Settings.Watcher do
   end
 
   defp merge(current, sections) do
-    Enum.reduce(sections, migrate(current), fn
-      {name, nil}, acc -> Map.delete(acc, name)
-      {name, values}, acc -> Map.put(acc, name, merge_section(name, Map.get(acc, name), values))
+    Enum.reduce_while(sections, {:ok, migrate(current)}, fn
+      {name, nil}, {:ok, acc} ->
+        {:cont, {:ok, Map.delete(acc, name)}}
+
+      {name, values}, {:ok, acc} ->
+        case merge_section(name, Map.get(acc, name), values) do
+          {:ok, section} -> {:cont, {:ok, Map.put(acc, name, section)}}
+          error -> {:halt, error}
+        end
     end)
   end
 
@@ -223,8 +231,20 @@ defmodule PictureRail.Settings.Watcher do
 
   defp merge_section(name, old, values) do
     old = if is_map(old), do: old, else: %{}
-    secrets = secret_keys(name, Map.get(values, "type", Map.get(old, "type")))
+    fields = fields(name, Map.get(values, "type", Map.get(old, "type")))
+    secrets = Field.secret_keys(fields)
 
+    merged = put_values(old, values, secrets)
+
+    # a kept secret only goes to the server it was given for
+    kept = for key <- secrets, Map.get(values, key) in [nil, ""], Map.has_key?(old, key), do: key
+
+    if kept == [] or Field.same_server?(fields, old, merged),
+      do: {:ok, merged},
+      else: {:error, for(key <- kept, do: "#{name}.#{key} #{Field.retype()}")}
+  end
+
+  defp put_values(old, values, secrets) do
     Enum.reduce(values, old, fn {key, value}, acc ->
       cond do
         value in [nil, ""] and key in secrets -> acc
@@ -234,17 +254,17 @@ defmodule PictureRail.Settings.Watcher do
     end)
   end
 
-  defp secret_keys("photo_source", type) when is_binary(type) do
+  defp fields("photo_source", type) when is_binary(type) do
     case PhotoSource.module_for(type) do
-      {:ok, module} -> Field.secret_keys(module.fields())
+      {:ok, module} -> module.fields()
       :error -> []
     end
   end
 
-  defp secret_keys("photo_source", _type), do: []
+  defp fields("photo_source", _type), do: []
 
-  defp secret_keys(name, _type) do
-    if name in Sections.names(), do: Field.secret_keys(Sections.fields(name)), else: []
+  defp fields(name, _type) do
+    if name in Sections.names(), do: Sections.fields(name), else: []
   end
 
   defp write(path, map) do
