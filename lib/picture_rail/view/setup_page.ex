@@ -234,7 +234,7 @@ defmodule PictureRail.View.SetupPage do
   # devices paired so far, as `{height, element}`; `nil` otherwise.
   defp phone(ctx) do
     with %{status: :connected, ip: ip} when is_binary(ip) <- Map.get(ctx, :network),
-         %{code: code} when is_binary(code) <- Map.get(ctx, :pairing) do
+         %{code: code} = pairing when is_binary(code) <- Map.get(ctx, :pairing) do
       {side, qr} = QR.render(Web.pair_url(ip, code), 7)
 
       small = fn text ->
@@ -272,6 +272,7 @@ defmodule PictureRail.View.SetupPage do
           el([Font.size(72), Font.color(Theme.color(:sky))], text(code(code))),
           small.("For pasting keys and tokens. Wi-Fi is set here."),
           forget
+          | forget_failed(pairing)
         ])
 
       {Kernel.max(side, @about_h), row([spacing(32)], [qr, about])}
@@ -279,6 +280,11 @@ defmodule PictureRail.View.SetupPage do
       _ -> nil
     end
   end
+
+  defp forget_failed(%{forget_failed?: true}),
+    do: [message_element("Couldn't save that: they're paired again after a restart", :red)]
+
+  defp forget_failed(_pairing), do: []
 
   # -- Wi-Fi --
 

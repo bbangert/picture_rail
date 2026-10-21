@@ -401,7 +401,7 @@ defmodule PictureRail.View do
   # The Setup page's "Forget devices": every web page session ends.
   def handle_info(:forget_paired, state) do
     send_event(:panel, :activity, nil)
-    if Process.whereis(Pairing), do: Pairing.forget()
+    if Process.whereis(Pairing), do: send_event(:pairing, :forgot, Pairing.forget())
     {:noreply, state}
   end
 

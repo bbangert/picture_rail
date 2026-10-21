@@ -52,7 +52,7 @@ defmodule PictureRail.View.Keyboard do
 
   @letters ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
   @symbols ["1234567890", ~S{-/:;()$&@"}, ".,?!'"]
-  @more_symbols ["[]{}#%^*+=", "_\\|~<>€£¥•", ".,?!'"]
+  @more_symbols ["[]{}#%^*+=", "_\\|~<>€£¥•", ".,?!'`"]
   @url_row ["https://", "http://", ".", "/", ":", ".local"]
 
   @doc "A fresh keyboard: letters, shift off."

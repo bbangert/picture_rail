@@ -82,10 +82,10 @@ defmodule PictureRail.Setup do
   end
 
   def fields(:home_assistant, _draft),
-    do: for(f <- Sections.fields("home_assistant"), do: {"home_assistant", f})
+    do: for(%Field{ui?: true} = f <- Sections.fields("home_assistant"), do: {"home_assistant", f})
 
   def fields(:display, _draft),
-    do: for(name <- @display, f <- Sections.fields(name), do: {name, f})
+    do: for(name <- @display, %Field{ui?: true} = f <- Sections.fields(name), do: {name, f})
 
   @doc "The file sections a section saves."
   @spec file_sections(section()) :: [String.t()]
@@ -127,7 +127,8 @@ defmodule PictureRail.Setup do
   """
   @spec wifi_join(draft()) :: {:ok, {String.t(), String.t() | nil, boolean()}} | {:error, map()}
   def wifi_join(draft) do
-    ssid = String.trim(draft[wifi_id("ssid")] || "")
+    # verbatim: spaces at either end are part of a network's name
+    ssid = draft[wifi_id("ssid")] || ""
 
     password =
       case draft[wifi_id("password")] do
@@ -139,7 +140,9 @@ defmodule PictureRail.Setup do
 
     errors =
       %{}
-      |> then(&if(ssid == "", do: Map.put(&1, wifi_id("ssid"), "is required"), else: &1))
+      |> then(
+        &if(String.trim(ssid) == "", do: Map.put(&1, wifi_id("ssid"), "is required"), else: &1)
+      )
       |> then(
         &if(secured? and password == "",
           do: Map.put(&1, wifi_id("password"), "is required"),
@@ -229,14 +232,40 @@ defmodule PictureRail.Setup do
         do: Map.put(base, "photo_source", %{"type" => draft[type_id()]}),
         else: base
 
-    Enum.reduce(fields(section, draft), base, fn {name, field}, acc ->
-      case {field.type, Map.get(draft, {name, field.key})} do
-        {:secret, %Secret{value: value}} when value != "" -> put_in(acc, [name, field.key], value)
-        {:secret, _} -> acc
-        {_type, value} -> put_in(acc, [name, field.key], value)
-      end
-    end)
+    values =
+      Enum.reduce(fields(section, draft), base, fn {name, field}, acc ->
+        case {field.type, Map.get(draft, {name, field.key})} do
+          {:secret, %Secret{value: value}} when value != "" ->
+            put_in(acc, [name, field.key], value)
+
+          {:secret, _} ->
+            acc
+
+          {_type, value} ->
+            put_in(acc, [name, field.key], value)
+        end
+      end)
+
+    drop_superseded(values, section, draft)
   end
+
+  # A hidden older field the save replaces is removed (`nil`).
+  defp drop_superseded(values, section, draft) do
+    for {name, %Field{superseded_by: newer} = f} <- all_fields(section, draft),
+        newer != nil,
+        Map.has_key?(values[name] || %{}, newer),
+        reduce: values,
+        do: (acc -> put_in(acc, [name, f.key], nil))
+  end
+
+  defp all_fields(:photo_source, draft) do
+    case source(draft) do
+      nil -> []
+      module -> for f <- module.fields(), do: {"photo_source", f}
+    end
+  end
+
+  defp all_fields(_section, _draft), do: []
 
   @doc """
   The photo source settings to try a draft with (Test, loading choices):

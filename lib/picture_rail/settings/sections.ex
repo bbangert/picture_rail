@@ -106,6 +106,7 @@ defmodule PictureRail.Settings.Sections do
 
   def fields("live_photo") do
     [
+      # Not shown until Live Photos play: nothing reads it yet.
       %Field{
         key: "pause_ms",
         label: "Live Photo pause",
@@ -113,7 +114,8 @@ defmodule PictureRail.Settings.Sections do
         default: 3_000,
         min: 0,
         max: 60_000,
-        step: 500
+        step: 500,
+        ui?: false
       }
     ]
   end

@@ -15,7 +15,7 @@ defmodule PictureRail.Web.Pairing do
   replaces it, which ends every session ("Forget paired devices" on the
   frame), and lifts a lockout: whoever taps it is at the frame. If the new
   secret can't be saved the old file is removed, so a restart can't bring
-  the forgotten sessions back.
+  the forgotten sessions back; if that fails too, `forget/1` says so.
 
   Reports the code to the `:pairing` controller.
   """
@@ -54,8 +54,12 @@ defmodule PictureRail.Web.Pairing do
   @spec secret_key_base(GenServer.server()) :: String.t()
   def secret_key_base(server \\ __MODULE__), do: GenServer.call(server, :secret)
 
-  @doc "End every session: a new secret, a new code, and no lockout."
-  @spec forget(GenServer.server()) :: :ok
+  @doc """
+  End every session: a new secret, a new code, and no lockout.
+  `{:error, :not_saved}` when neither the new secret could be saved nor the
+  old one removed: the sessions end now, but a restart brings them back.
+  """
+  @spec forget(GenServer.server()) :: :ok | {:error, :not_saved}
   def forget(server \\ __MODULE__), do: GenServer.call(server, :forget)
 
   # -- GenServer --
@@ -89,9 +93,9 @@ defmodule PictureRail.Web.Pairing do
 
   def handle_call(:forget, _from, state) do
     Logger.info("Web: paired devices forgotten")
-    secret = new_secret(state.file)
+    {secret, saved} = new_secret(state.file)
     state = %{state | secret: secret, failures: 0, rounds: 0, locked_until: nil}
-    {:reply, :ok, new_code(state)}
+    {:reply, saved, new_code(state)}
   end
 
   def handle_call({:verify, code}, _from, state) do
@@ -171,28 +175,37 @@ defmodule PictureRail.Web.Pairing do
          true <- byte_size(secret) >= @secret_bytes do
       String.trim(text)
     else
-      _ -> new_secret(file)
+      _ -> file |> new_secret() |> elem(0)
     end
   end
 
-  # Base 64: Plug wants a secret of at least 64 bytes, and text.
+  # Base 64: Plug wants a secret of at least 64 bytes, and text. Also
+  # whether a restart keeps it from the old one: saved, or the old one gone.
   defp new_secret(file) do
     secret = Base.encode64(:crypto.strong_rand_bytes(@secret_bytes))
+    {secret, save_secret(file, secret)}
+  end
 
-    case PrivateFile.write(file, secret) do
-      :ok ->
-        :ok
+  defp save_secret(file, secret) do
+    with {:error, reason} <- PrivateFile.write(file, secret) do
+      # the old one mustn't come back on a restart
+      case File.rm(file) do
+        result when result == :ok or result == {:error, :enoent} ->
+          Logger.error(
+            "Web: couldn't save the session secret (#{inspect(reason)}); sessions end on restart"
+          )
 
-      {:error, reason} ->
-        # the old one mustn't come back on a restart
-        _ = File.rm(file)
+          :ok
 
-        Logger.error(
-          "Web: couldn't save the session secret (#{inspect(reason)}); sessions end on restart"
-        )
+        {:error, rm_reason} ->
+          Logger.error(
+            "Web: couldn't save the session secret (#{inspect(reason)}) or remove the old one " <>
+              "(#{inspect(rm_reason)}); forgotten sessions come back on restart"
+          )
+
+          {:error, :not_saved}
+      end
     end
-
-    secret
   end
 
   defp notify_app(code) do

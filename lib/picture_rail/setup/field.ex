@@ -22,7 +22,10 @@ defmodule PictureRail.Setup.Field do
       section provides (a photo source's `choices/2`)
 
   Fields with `ui?: false` are read from the file but never shown (older
-  keys kept for files edited by hand).
+  keys kept for files edited by hand). One with `superseded_by: key` is an
+  older way of setting that field: a save from the Setup page or the web
+  page, which shows only the newer field, removes it, so what's shown is
+  what's used.
 
   A stored secret is only ever sent to the server it was given for: see
   `same_server?/3`. A toggle with `secures?: true` (checking the server's
@@ -44,7 +47,8 @@ defmodule PictureRail.Setup.Field do
     max: nil,
     step: nil,
     ui?: true,
-    secures?: false
+    secures?: false,
+    superseded_by: nil
   ]
 
   @type type :: :url | :text | :secret | :toggle | :integer | :seconds | {:choices, :multi}
@@ -60,7 +64,8 @@ defmodule PictureRail.Setup.Field do
           max: integer() | nil,
           step: pos_integer() | nil,
           ui?: boolean(),
-          secures?: boolean()
+          secures?: boolean(),
+          superseded_by: String.t() | nil
         }
 
   @doc """
@@ -147,8 +152,8 @@ defmodule PictureRail.Setup.Field do
       %__MODULE__{type: :url, key: key} ->
         origin(old[key]) == origin(new[key])
 
-      %__MODULE__{type: :toggle, secures?: true, key: key, default: default} ->
-        not (Map.get(old, key, default) == true and Map.get(new, key, default) == false)
+      %__MODULE__{type: :toggle, secures?: true} = field ->
+        not (value_of(field, old) == true and value_of(field, new) == false)
 
       _field ->
         true
@@ -161,6 +166,14 @@ defmodule PictureRail.Setup.Field do
   end
 
   defp origin(_url), do: nil
+
+  # As validation reads it: absent or `null` is the default.
+  defp value_of(%__MODULE__{key: key, default: default}, values) do
+    case Map.get(values, key) do
+      nil -> default
+      value -> value
+    end
+  end
 
   @doc "What a kept secret needs when the server changes."
   @spec retype() :: String.t()

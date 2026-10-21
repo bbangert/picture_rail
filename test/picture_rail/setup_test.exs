@@ -41,7 +41,9 @@ defmodule PictureRail.SetupTest do
     display = Setup.draft(:display, public(%{"slideshow" => %{"interval_ms" => 9_000}}))
     assert display[{"slideshow", "interval_ms"}] == 9_000
     assert display[{"cache", "include_live_photos"}] == true
-    assert display[{"live_photo", "pause_ms"}] == 3_000
+    assert display[{"panel", "long_press_ms"}] == 500
+    # not shown: not in the draft either
+    refute Map.has_key?(display, {"live_photo", "pause_ms"})
   end
 
   test "secret_set? from the public settings, only for the stored type" do
@@ -65,7 +67,9 @@ defmodule PictureRail.SetupTest do
              "photo_source" => %{
                "type" => "immich",
                "url" => "https://photos.example.com",
-               "album_ids" => ["a1"]
+               "album_ids" => ["a1"],
+               # albums by name (hand-edited files) give way to the ones shown
+               "album_names" => nil
              }
            }
 
@@ -75,8 +79,10 @@ defmodule PictureRail.SetupTest do
     emptied = Map.put(draft, {"photo_source", "api_key"}, %Secret{value: ""})
     refute Map.has_key?(Setup.values(:photo_source, emptied)["photo_source"], "api_key")
 
-    assert Map.keys(Setup.values(:display, Setup.draft(:display, public(%{})))) ==
-             ~w(cache live_photo panel slideshow)
+    display = Setup.values(:display, Setup.draft(:display, public(%{})))
+    assert Map.keys(display) == ~w(cache live_photo panel slideshow)
+    # not shown (nothing plays Live Photos yet): left as it is
+    assert display["live_photo"] == %{}
   end
 
   test "the config to try a draft with fills in the stored secret, for the same server" do
@@ -167,10 +173,16 @@ defmodule PictureRail.SetupTest do
         |> Map.put(Setup.wifi_id("ssid"), "  Secret ")
         |> Map.put(Setup.wifi_id("secured"), false)
 
-      assert Setup.wifi_join(hidden) == {:ok, {"Secret", nil, true}}
+      # spaces are part of the name
+      assert Setup.wifi_join(hidden) == {:ok, {"  Secret ", nil, true}}
 
-      assert {:error, %{{"wifi", "ssid"} => "is required"}} =
-               Setup.wifi_join(Setup.wifi_draft(nil))
+      assert Setup.wifi_join(Setup.wifi_draft(%{ssid: " Home ", security: :open})) ==
+               {:ok, {" Home ", nil, false}}
+
+      for ssid <- [nil, "   "] do
+        blank = Map.put(Setup.wifi_draft(nil), Setup.wifi_id("ssid"), ssid)
+        assert {:error, %{{"wifi", "ssid"} => "is required"}} = Setup.wifi_join(blank)
+      end
     end
   end
 end

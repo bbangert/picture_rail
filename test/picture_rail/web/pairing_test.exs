@@ -93,6 +93,28 @@ defmodule PictureRail.Web.PairingTest do
     assert rounds.() == 0
   end
 
+  test "forgetting says so when the old secret can't be replaced or removed", %{tmp_dir: dir} do
+    locked = Path.join(dir, "locked")
+    File.mkdir_p!(locked)
+    pairing = start(dir, secret_file: Path.join(locked, "web_secret"))
+    old = Pairing.secret_key_base(pairing)
+
+    # neither a new file nor removing the old one (a read-only filesystem)
+    File.chmod!(locked, 0o500)
+    on_exit(fn -> File.chmod(locked, 0o700) end)
+
+    assert Pairing.forget(pairing) == {:error, :not_saved}
+    # ended for now all the same
+    refute Pairing.secret_key_base(pairing) == old
+
+    assert PictureRail.App.Pairing.forgot({:error, :not_saved}, %{forget_failed?: false}) ==
+             %{forget_failed?: true}
+
+    assert PictureRail.App.Pairing.forgot(:ok, %{forget_failed?: true}) == %{
+             forget_failed?: false
+           }
+  end
+
   test "the code changes by itself", %{tmp_dir: dir} do
     _pairing = start(dir, code_ms: 20)
     assert_receive {:code, _next}, 500

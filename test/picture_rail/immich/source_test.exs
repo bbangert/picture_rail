@@ -1,7 +1,7 @@
 defmodule PictureRail.Immich.SourceTest do
   use ExUnit.Case, async: true
 
-  alias PictureRail.Immich.Source
+  alias PictureRail.Immich.{Cache, Source}
   alias PictureRail.Setup.Field
 
   @fixtures Path.expand("../../fixtures/immich", __DIR__)
@@ -83,6 +83,25 @@ defmodule PictureRail.Immich.SourceTest do
   test "the check passes against a working server" do
     serve()
     assert Source.check(@config) == :ok
+  end
+
+  test "the source is a subtree: its download tasks stop with it" do
+    registry = :"source_test_#{System.unique_integer([:positive])}"
+    start_supervised!({Registry, keys: :unique, name: registry})
+    name = {:via, Registry, {registry, :active, Source}}
+    spec = Source.child_spec(name: name, config: @config)
+    sup = start_supervised!(spec)
+
+    assert [{Cache, cache, :worker, _}, {_id, tasks, :supervisor, [Task.Supervisor]}] =
+             Supervisor.which_children(sup)
+
+    assert GenServer.whereis(name) == cache
+    task = Task.Supervisor.async_nolink(tasks, fn -> Process.sleep(:infinity) end)
+    ref = Process.monitor(task.pid)
+
+    # what the manager does when the source goes
+    :ok = stop_supervised(spec.id)
+    assert_receive {:DOWN, ^ref, :process, _, :shutdown}
   end
 
   test "its own statuses in words" do

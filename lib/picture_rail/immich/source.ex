@@ -40,13 +40,15 @@ defmodule PictureRail.Immich.Source do
         help: "From Account Settings > API Keys, with album.read, asset.read and asset.view"
       },
       %Field{key: "album_ids", label: "Albums", type: {:choices, :multi}, default: []},
-      # Albums picked by name, for files edited by hand before album_ids.
+      # Albums picked by name, for files edited by hand before album_ids;
+      # saving albums on the Setup page or web page replaces them.
       %Field{
         key: "album_names",
         label: "Album names",
         type: {:choices, :multi},
         default: [],
-        ui?: false
+        ui?: false,
+        superseded_by: "album_ids"
       }
     ]
   end
@@ -108,9 +110,27 @@ defmodule PictureRail.Immich.Source do
   defp describe({:error, {:http_error, status}}), do: "The server answered #{status}"
   defp describe(_other), do: "Unexpected answer from the server"
 
+  # The cache and the tasks it downloads in, as one subtree: stopping the
+  # source stops the cache, then its tasks (`:rest_for_one`, in reverse),
+  # before a replacement can start and tidy the same directory.
   @impl PictureRail.PhotoSource
-  def child_spec(opts),
-    do: %{id: Cache, start: {Cache, :start_link, [[name: Keyword.fetch!(opts, :name)]]}}
+  def child_spec(opts) do
+    name = Keyword.fetch!(opts, :name)
+    tasks = tasks_name(name)
+    children = [{Task.Supervisor, name: tasks}, {Cache, name: name, task_sup: tasks}]
+
+    %{
+      id: Cache,
+      type: :supervisor,
+      start: {Supervisor, :start_link, [children, [strategy: :rest_for_one]]}
+    }
+  end
+
+  # Next to the cache's name: in its registry, or beside its atom.
+  defp tasks_name({:via, Registry, {registry, _key, _value}}),
+    do: {:via, Registry, {registry, {__MODULE__, :tasks}}}
+
+  defp tasks_name(name) when is_atom(name), do: Module.concat(name, Tasks)
 
   @impl PictureRail.PhotoSource
   def next(server) do

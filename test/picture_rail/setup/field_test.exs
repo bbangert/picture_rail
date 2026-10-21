@@ -110,6 +110,8 @@ defmodule PictureRail.Setup.FieldTest do
     refute Field.same_server?(fields, old, %{"url" => "https://evil.local:8123"})
     refute Field.same_server?(fields, old, %{"url" => nil})
     refute Field.same_server?(fields, old, Map.put(old, "verify", false))
+    # `null` in the file is the default (on), as validation reads it
+    refute Field.same_server?(fields, Map.put(old, "verify", nil), Map.put(old, "verify", false))
     # already off: leaving it off isn't a change
     off = Map.put(old, "verify", false)
     assert Field.same_server?(fields, off, off)

@@ -1,6 +1,7 @@
 defmodule PictureRail.Settings.WatcherTest do
   use ExUnit.Case, async: true
 
+  alias PictureRail.{Settings, Setup}
   alias PictureRail.Settings.Watcher
 
   @moduletag :tmp_dir
@@ -174,6 +175,22 @@ defmodule PictureRail.Settings.WatcherTest do
       json = path |> File.read!() |> Jason.decode!()
       assert json["home_assistant"]["token"] == "secret-token"
       assert json["photo_source"]["api_key"] == "new-key"
+    end
+
+    test "saving albums replaces albums picked by name", %{tmp_dir: dir} do
+      path = Path.join(dir, "picture_rail.json")
+      write(path, %{"photo_source" => Map.put(@immich, "album_names", ["Old"])})
+      watcher = start(path)
+      assert_receive {:notified, _, :ok}
+
+      # as the Setup page saves it, albums untouched
+      draft = Setup.draft(:photo_source, Settings.public(Watcher.current(watcher)))
+      values = Setup.values(:photo_source, draft)
+      assert :ok = Watcher.update(values, watcher)
+
+      json = path |> File.read!() |> Jason.decode!()
+      refute Map.has_key?(json["photo_source"], "album_names")
+      assert Watcher.current(watcher).photo_source.config["album_names"] == []
     end
 
     test "a nil section is removed, a nil key goes back to its default", %{tmp_dir: dir} do
