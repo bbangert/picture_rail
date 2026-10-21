@@ -110,9 +110,11 @@ defmodule PictureRail.Immich.Source do
   defp describe({:error, {:http_error, status}}), do: "The server answered #{status}"
   defp describe(_other), do: "Unexpected answer from the server"
 
-  # The cache and the tasks it downloads in, as one subtree: stopping the
-  # source stops the cache, then its tasks (`:rest_for_one`, in reverse),
-  # before a replacement can start and tidy the same directory.
+  # The cache and the tasks it downloads in, as one subtree that lives and
+  # dies together (`:one_for_all`): stopping the source stops the cache,
+  # then its tasks, before a replacement can start and tidy the same
+  # directory, and a crashed cache takes its downloads with it for the
+  # same reason. The tasks come first: the cache can start some in init.
   @impl PictureRail.PhotoSource
   def child_spec(opts) do
     name = Keyword.fetch!(opts, :name)
@@ -122,7 +124,7 @@ defmodule PictureRail.Immich.Source do
     %{
       id: Cache,
       type: :supervisor,
-      start: {Supervisor, :start_link, [children, [strategy: :rest_for_one]]}
+      start: {Supervisor, :start_link, [children, [strategy: :one_for_all]]}
     }
   end
 

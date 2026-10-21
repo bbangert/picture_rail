@@ -99,6 +99,17 @@ defmodule PictureRail.Immich.SourceTest do
     task = Task.Supervisor.async_nolink(tasks, fn -> Process.sleep(:infinity) end)
     ref = Process.monitor(task.pid)
 
+    # a crashed cache takes its downloads with it
+    Process.exit(cache, :kill)
+    assert_receive {:DOWN, ^ref, :process, _, :shutdown}
+
+    assert [{Cache, new_cache, :worker, _}, {_id, tasks, :supervisor, _}] =
+             Supervisor.which_children(sup)
+
+    assert new_cache != cache
+    task = Task.Supervisor.async_nolink(tasks, fn -> Process.sleep(:infinity) end)
+    ref = Process.monitor(task.pid)
+
     # what the manager does when the source goes
     :ok = stop_supervised(spec.id)
     assert_receive {:DOWN, ^ref, :process, _, :shutdown}
