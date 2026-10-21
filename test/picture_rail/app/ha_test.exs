@@ -12,7 +12,16 @@ defmodule PictureRail.App.HATest do
     Process.put(:states, HAFixture.states())
     src = %{HAFixture.source() | state: &Map.get(Process.get(:states), &1)}
 
-    state = %{status: :connected, revision: 1, tick: 0, pending: %{}, error: nil, energy: nil}
+    state = %{
+      status: :connected,
+      revision: 1,
+      tick: 0,
+      pending: %{},
+      error: nil,
+      energy: nil,
+      sliding: %{}
+    }
+
     %{src: src, params: %{source: src}, state: state}
   end
 
@@ -179,6 +188,70 @@ defmodule PictureRail.App.HATest do
 
     state = HA.states(["light.ceiling"], state, panel({:entity, "light.ceiling"}), %{}, params)
     assert state.pending == %{}
+  end
+
+  # callbacks that tell the test what the controller did
+  defp callbacks do
+    test = self()
+
+    %{
+      call_service: fn request ->
+        send(test, {:called, request})
+        %{ref: make_ref()}
+      end,
+      open: &send(test, {:opened, &1}),
+      activity: fn -> send(test, :activity) end
+    }
+  end
+
+  test "a press: long opens the detail; a tap toggles, or opens what can't be tapped", %{
+    state: state,
+    params: params
+  } do
+    deps = panel(:overview)
+
+    HA.press({"light.ceiling", true}, state, deps, callbacks(), params)
+    assert_received {:opened, {:entity, "light.ceiling"}}
+    refute_received {:called, _}
+
+    state = HA.press({"light.ceiling", false}, state, deps, callbacks(), params)
+    assert_received {:called, %{entity_id: "light.ceiling", service: "turn_off"}}
+    assert state.pending["light.ceiling"].state == "off"
+
+    # a tap again goes by what's shown (off, pending): on
+    HA.press({"light.ceiling", false}, state, deps, callbacks(), params)
+    assert_received {:called, %{entity_id: "light.ceiling", service: "turn_on"}}
+
+    HA.press({"climate.hall", false}, state, deps, callbacks(), params)
+    assert_received {:opened, {:entity, "climate.hall"}}
+
+    # nothing to do and no detail: nothing
+    assert HA.press({"sensor.hall_battery", false}, state, deps, callbacks(), params) == state
+    refute_received {_, _}
+  end
+
+  test "a slider: shown at once, sent once per 250 ms with the latest value", %{
+    state: state,
+    params: params
+  } do
+    key = {"light.ceiling", :brightness}
+    deps = panel({:entity, "light.ceiling"})
+    slide = &HA.slide({key, &1}, &2, deps, callbacks())
+    state = state |> then(&slide.(30, &1)) |> then(&slide.(55, &1))
+    assert HA.expose(state, deps, params).sliders == %{key => 55}
+
+    # every move keeps the panel up
+    assert_received :activity
+    assert_received :activity
+
+    # one send timer for the two moves
+    assert_receive {:slide_send, ^key}, 500
+    refute_received {:slide_send, _}
+
+    state = HA.handle_info({:slide_send, key}, state, deps, callbacks())
+    assert_received {:called, %{service: "turn_on", data: %{brightness_pct: 55}}}
+    assert HA.expose(state, deps, params).sliders == %{}
+    assert state.pending["light.ceiling"].attrs["brightness"] == round(55 * 255 / 100)
   end
 
   test "slice ids cover summaries, sections, badges and readouts", %{src: src} do

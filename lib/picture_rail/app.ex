@@ -20,7 +20,9 @@ defmodule PictureRail.App do
   """
   use Solve
 
+  alias PictureRail.Network
   alias PictureRail.Settings.Watcher
+  alias PictureRail.Web.Pairing
 
   @impl Solve
   def controllers do
@@ -28,7 +30,12 @@ defmodule PictureRail.App do
       controller!(name: :settings, module: PictureRail.App.Settings),
       controller!(name: :orientation, module: PictureRail.App.Orientation),
       controller!(name: :network, module: PictureRail.App.Network),
-      controller!(name: :pairing, module: PictureRail.App.Pairing, dependencies: [:network]),
+      controller!(
+        name: :pairing,
+        module: PictureRail.App.Pairing,
+        dependencies: [:network],
+        callbacks: %{forget: &forget_paired/0}
+      ),
       controller!(
         name: :setup,
         module: PictureRail.App.Setup,
@@ -37,14 +44,18 @@ defmodule PictureRail.App do
           run: &run_task/1,
           stored: &stored/1,
           save: &Watcher.update/1,
-          join: &PictureRail.Network.join/3,
+          join: &Network.join/3,
           wifi_watch: &wifi_watch/0
         }
       ),
       controller!(
         name: :panel,
         module: PictureRail.App.Panel,
-        dependencies: [:settings, :setup]
+        dependencies: [:settings, :setup],
+        callbacks: %{
+          open_setup: fn section -> dispatch(:setup, :open, section) end,
+          first_boot?: &first_boot?/1
+        }
       ),
       controller!(name: :photos, module: PictureRail.App.Photos),
       controller!(
@@ -57,7 +68,11 @@ defmodule PictureRail.App do
         name: :ha,
         module: PictureRail.App.HA,
         dependencies: [:panel],
-        callbacks: %{call_service: &call_service/1}
+        callbacks: %{
+          call_service: &call_service/1,
+          open: fn view -> dispatch(:panel, :open, view) end,
+          activity: fn -> dispatch(:panel, :activity, nil) end
+        }
       )
     ]
   end
@@ -81,12 +96,38 @@ defmodule PictureRail.App do
   defp run_task(fun), do: Task.Supervisor.async_nolink(PictureRail.TaskSup, fun)
 
   defp wifi_watch do
-    if Process.whereis(PictureRail.Network), do: PictureRail.Network.watch()
+    if Process.whereis(Network), do: Network.watch()
     :ok
   end
 
   # A saved section with its credentials, read inside those tasks only.
   defp stored(name), do: PictureRail.Settings.values(PictureRail.Settings.current(), name)
+
+  # Every web page session ends (the sessions' secret is replaced).
+  defp forget_paired do
+    if Process.whereis(Pairing), do: Pairing.forget(), else: :ok
+  end
+
+  @doc false
+  # Nothing to show and no way to set it up from a phone: no Wi-Fi or
+  # Ethernet, and nothing in the settings. Not without the network (it
+  # isn't started in tests), nor if its backend can't answer.
+  @spec first_boot?(map()) :: boolean()
+  def first_boot?(configured) do
+    if Process.whereis(Network) do
+      backend = Network.Backend.impl()
+
+      Network.first_boot?(
+        backend.configured_networks?(),
+        backend.ethernet_up?(),
+        configured
+      )
+    else
+      false
+    end
+  catch
+    :exit, _reason -> false
+  end
 
   # The source never waits on the network; if none is running, there's
   # nothing to show.

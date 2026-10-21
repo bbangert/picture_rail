@@ -22,45 +22,9 @@ defmodule PictureRail.View.Panel do
 
   import PictureRail.App.Panel, only: [is_setup_view: 1]
 
-  alias PictureRail.HA.{Index, Overview}
+  alias PictureRail.HA.{Actions, Index, Overview}
   alias PictureRail.Setup
   alias PictureRail.View.{EnergyPage, Format, LCARS, SetupPage, Theme}
-
-  @toggle ~w(light switch fan input_boolean)
-  @run %{
-    "scene" => "turn_on",
-    "script" => "turn_on",
-    "button" => "press",
-    "input_button" => "press"
-  }
-  @details ~w(light climate cover media_player)
-
-  @doc "Whether tapping an entity's pill toggles or runs it."
-  @spec tap_action(String.t(), Hassock.EntityState.t() | nil) :: map() | nil
-  def tap_action(entity_id, es) do
-    domain = Index.domain(entity_id)
-
-    cond do
-      not Overview.available?(es) ->
-        nil
-
-      domain in @toggle ->
-        on? = es.state == "on"
-
-        %{
-          domain: domain,
-          service: if(on?, do: "turn_off", else: "turn_on"),
-          entity_id: entity_id,
-          optimistic: if(on?, do: "off", else: "on")
-        }
-
-      Map.has_key?(@run, domain) ->
-        %{domain: domain, service: @run[domain], entity_id: entity_id}
-
-      true ->
-        nil
-    end
-  end
 
   @doc """
   What the panel says while it has nothing from Home Assistant yet (no
@@ -77,15 +41,11 @@ defmodule PictureRail.View.Panel do
   @spec setup_view?(term()) :: boolean()
   def setup_view?(view), do: is_setup_view(view)
 
-  @doc "Whether an entity has a detail view (a chevron on its pill)."
-  @spec detail?(String.t()) :: boolean()
-  def detail?(entity_id), do: Index.domain(entity_id) in @details
-
   @doc """
   The panel for the oriented screen `size`. `ha` and `panel` are the
-  controllers' exposed maps (and `setup`, `settings` and `photos` for the
-  Setup pages); `sliders` holds slider values being dragged
-  (`%{{entity_id, kind} => value}`).
+  controllers' exposed maps (and `setup`, `settings`, `photos`, `network`
+  and `pairing` for the Setup pages), as `solve/2` gives them: they carry
+  the event tuples the panel's presses send.
   """
   @spec render(map()) :: term()
   def render(%{size: {w, h}} = ctx) do
@@ -1008,7 +968,7 @@ defmodule PictureRail.View.Panel do
         color -> pill_fill(color, true, usable?)
       end
 
-    chevron? = detail?(entity_id) and usable?
+    chevron? = Actions.detail?(entity_id) and usable?
     chars = trunc((ctx.pill_w - if(chevron?, do: 110, else: 60)) / (Theme.size(:label) * 0.42))
 
     main =
@@ -1267,7 +1227,7 @@ defmodule PictureRail.View.Panel do
   end
 
   defp detail_controls(ctx, _domain, id, es, color) do
-    case tap_action(id, es) do
+    case Actions.tap(id, es) do
       nil ->
         []
 
@@ -1312,13 +1272,16 @@ defmodule PictureRail.View.Panel do
   # Keyed by entity and kind, so moving from one entity's detail to
   # another's doesn't reuse this slider (and its drag) by position; in an
   # el of its own, as keyed siblings must all be keyed.
+  # The value under the finger (held by `:ha` until it's sent), or the
+  # entity's own.
   defp slider(ctx, id, kind, color, min, max, step, value) do
-    value = Map.get(ctx.sliders, {id, kind}, value)
+    value = Map.get(Map.get(ctx.ha, :sliders) || %{}, {id, kind}, value)
+    press = event(ctx.ha, :slide, {id, kind})
 
-    el([width(fill())], slider_input(id, kind, color, min, max, step, value))
+    el([width(fill())], slider_input(id, kind, color, min, max, step, value, press))
   end
 
-  defp slider_input(id, kind, color, min, max, step, value) do
+  defp slider_input(id, kind, color, min, max, step, value, press) do
     Input.slider(
       [
         key({:slider, id, kind}),
@@ -1359,7 +1322,7 @@ defmodule PictureRail.View.Panel do
               none()
             )
         ),
-        Event.on_change({:slider, id, kind})
+        Event.on_change(press)
       ],
       Kernel.max(min, Kernel.min(max, value))
     )

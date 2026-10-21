@@ -22,16 +22,13 @@ defmodule PictureRail.View do
   field's id and its text). Any touch or click while the panel is up
   restarts its idle timeout.
 
-  A few presses still come here, where they need more than one
-  controller: a pill's press is a tap unless the touch that made it was
-  held for
-  `panel.long_press_ms` (settings) without moving: Emerge has no
-  long-press event, and pairing `on_mouse_down` with `on_press` on one
-  element can lose the press, so holds are timed from the raw `:touch`
-  events, which arrive before the press. Slider drags are sent to Home
-  Assistant at most every 250 ms; the value under the finger is held here
-  until it is sent, then by the `:ha` controller as an optimistic
-  attribute until Home Assistant reports it.
+  One press still comes here: a pill's, which is a tap unless the touch
+  that made it was held for `panel.long_press_ms` (settings) without
+  moving. Emerge has no long-press event, and pairing `on_mouse_down`
+  with `on_press` on one element can lose the press, so holds are timed
+  from the raw `:touch` events, which arrive before the press, and only
+  the viewport gets those. What the press does is the `:ha` controller's
+  (`:press`).
 
   Start options: `spike: true` shows the rotation test card instead of the
   normal UI (plan task 2.3); `stats: true` logs Emerge's frame statistics.
@@ -41,11 +38,9 @@ defmodule PictureRail.View do
 
   require Logger
 
-  alias PictureRail.{App, Network}
+  alias PictureRail.App
   alias PictureRail.View.{Config, Panel, SetupPage, Status}
-  alias PictureRail.Web.Pairing
 
-  @slider_send_ms 250
   # how far a held finger may drift and still count as a long press
   @hold_slop_px 30
 
@@ -76,8 +71,6 @@ defmodule PictureRail.View do
     :exit, _ -> nil
   end
 
-  @first_boot_ms 3_000
-
   @impl Viewport
   def mount(opts) do
     config = Config.build()
@@ -95,14 +88,9 @@ defmodule PictureRail.View do
       last_tap: nil,
       taps: 0,
       touches: %{},
-      last_release: nil,
-      # slider values under the finger, not yet sent
-      sliders: %{},
-      slider_timers: %{}
+      last_release: nil
     }
 
-    # a frame with nothing set up opens Wi-Fi setup by itself
-    Process.send_after(self(), :first_boot, @first_boot_ms)
     {:ok, state, config}
   end
 
@@ -259,8 +247,7 @@ defmodule PictureRail.View do
       settings: solve(App, :settings),
       photos: solve(App, :photos),
       network: solve(App, :network),
-      pairing: solve(App, :pairing),
-      sliders: state.sliders
+      pairing: solve(App, :pairing)
     }
 
     # the keyboard takes the whole screen while a Setup field is edited
@@ -361,93 +348,8 @@ defmodule PictureRail.View do
 
   @impl Viewport
   def handle_info({:pill, entity_id}, state) do
-    es = (solve(App, :ha) || %{states: %{}}).states[entity_id]
-
-    cond do
-      long_press?(state) ->
-        send_event(:panel, :open, {:entity, entity_id})
-
-      request = Panel.tap_action(entity_id, es) ->
-        send_event(:panel, :activity, nil)
-        send_event(:ha, :call, request)
-
-      Panel.detail?(entity_id) ->
-        send_event(:panel, :open, {:entity, entity_id})
-
-      true ->
-        send_event(:panel, :activity, nil)
-    end
-
+    send_event(:ha, :press, {entity_id, long_press?(state)})
     {:noreply, %{state | last_release: nil}}
-  end
-
-  # The Setup page's "Forget devices": every web page session ends.
-  def handle_info(:forget_paired, state) do
-    send_event(:panel, :activity, nil)
-    if Process.whereis(Pairing), do: send_event(:pairing, :forgot, Pairing.forget())
-    {:noreply, state}
-  end
-
-  # The Setup page: open a section, or an edit in the open one.
-  def handle_info({:setup_open, section}, state) do
-    send_event(:setup, :open, section)
-    send_event(:panel, :open, {:setup, section})
-    {:noreply, state}
-  end
-
-  # From one section to the next: in its place, so Back doesn't land on a
-  # section whose editor has gone.
-  def handle_info({:setup_next, section}, state) do
-    send_event(:setup, :open, section)
-    send_event(:panel, :replace, {:setup, section})
-    {:noreply, state}
-  end
-
-  # A slider moved: show the value at once, send it at most every
-  # @slider_send_ms.
-  # (Emerge appends the value to a tuple message.)
-  def handle_info({:slider, entity_id, kind, value}, state) do
-    key = {entity_id, kind}
-    send_event(:panel, :activity, nil)
-
-    timers =
-      if Map.has_key?(state.slider_timers, key),
-        do: state.slider_timers,
-        else:
-          Map.put(
-            state.slider_timers,
-            key,
-            Process.send_after(self(), {:slider_send, key}, @slider_send_ms)
-          )
-
-    state = %{state | sliders: Map.put(state.sliders, key, value), slider_timers: timers}
-    {:noreply, Viewport.rerender(state)}
-  end
-
-  # Sent: from here on the `:ha` controller holds the value (optimistic
-  # attributes) until Home Assistant reports it.
-  def handle_info({:slider_send, {entity_id, kind} = key}, state) do
-    {value, sliders} = Map.pop(state.sliders, key)
-    if value, do: send_event(:ha, :call, slider_request(entity_id, kind, value))
-    {:noreply, %{state | sliders: sliders, slider_timers: Map.delete(state.slider_timers, key)}}
-  end
-
-  def handle_info(:first_boot, state) do
-    backend = Network.Backend.impl()
-
-    with %{configured: configured} <- solve(App, :settings),
-         true <-
-           Network.first_boot?(
-             backend.configured_networks?(),
-             backend.ethernet_up?(),
-             configured
-           ) do
-      Logger.info("View: nothing set up; opening Wi-Fi setup")
-      send_event(:setup, :open, :wifi)
-      send_event(:panel, :goto, {:setup, :wifi})
-    end
-
-    {:noreply, state}
   end
 
   def handle_info({:spike_tap, name}, state) do
@@ -469,46 +371,6 @@ defmodule PictureRail.View do
       _ -> PictureRail.Settings.defaults().panel.long_press_ms
     end
   end
-
-  @doc false
-  @spec slider_request(String.t(), atom(), number()) :: map()
-  def slider_request(id, :brightness, v) do
-    %{
-      domain: "light",
-      service: "turn_on",
-      entity_id: id,
-      data: %{brightness_pct: round(v)},
-      optimistic: "on",
-      optimistic_attrs: %{"brightness" => round(v * 255 / 100)}
-    }
-  end
-
-  def slider_request(id, :color_temp, v),
-    do: %{
-      domain: "light",
-      service: "turn_on",
-      entity_id: id,
-      data: %{color_temp_kelvin: round(v)},
-      optimistic_attrs: %{"color_temp_kelvin" => round(v)}
-    }
-
-  def slider_request(id, :position, v),
-    do: %{
-      domain: "cover",
-      service: "set_cover_position",
-      entity_id: id,
-      data: %{position: round(v)},
-      optimistic_attrs: %{"current_position" => round(v)}
-    }
-
-  def slider_request(id, :volume, v),
-    do: %{
-      domain: "media_player",
-      service: "volume_set",
-      entity_id: id,
-      data: %{volume_level: v / 100},
-      optimistic_attrs: %{"volume_level" => v / 100}
-    }
 
   # An event tuple with a fixed argument on a value event (`on_change`):
   # one payload, `{argument, value}`, as Solve takes one.
