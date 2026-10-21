@@ -28,7 +28,7 @@ defmodule PictureRail.App do
       controller!(name: :settings, module: PictureRail.App.Settings),
       controller!(name: :orientation, module: PictureRail.App.Orientation),
       controller!(name: :network, module: PictureRail.App.Network),
-      controller!(name: :pairing, module: PictureRail.App.Pairing),
+      controller!(name: :pairing, module: PictureRail.App.Pairing, dependencies: [:network]),
       controller!(
         name: :setup,
         module: PictureRail.App.Setup,

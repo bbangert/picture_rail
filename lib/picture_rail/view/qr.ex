@@ -1,9 +1,9 @@
 defmodule PictureRail.View.QR do
   @moduledoc """
-  A QR code (`EQRCode`) drawn with Emerge elements, for a phone's camera to
-  read off the screen: dark on white with a quiet zone around it, one row
-  per module row, and one element per run of dark or light modules (a few
-  hundred elements rather than a thousand cells).
+  A QR code (`PictureRail.QR`'s runs) drawn with Emerge elements, for a
+  phone's camera to read off the screen: dark on white with a quiet zone
+  around it, one row per module row, and one element per run of dark or
+  light modules (a few hundred elements rather than a thousand cells).
   """
   use Emerge.UI
 
@@ -12,31 +12,11 @@ defmodule PictureRail.View.QR do
   @quiet 4
 
   @doc """
-  A matrix (rows of `0`/`1`, as tuples or lists) as runs per row:
-  `[{:dark | :light, length}]`.
+  The runs (`PictureRail.QR.encode/1`), `module` px per module:
+  `{side, element}`, `side` the element's width and height in px.
   """
-  @spec runs(tuple() | [list()]) :: [[{:dark | :light, pos_integer()}]]
-  def runs(matrix) do
-    for row <- to_list(matrix) do
-      row
-      |> to_list()
-      |> Enum.chunk_by(&(&1 == 1))
-      |> Enum.map(fn [first | _] = run ->
-        {if(first == 1, do: :dark, else: :light), length(run)}
-      end)
-    end
-  end
-
-  defp to_list(tuple) when is_tuple(tuple), do: Tuple.to_list(tuple)
-  defp to_list(list) when is_list(list), do: list
-
-  @doc """
-  `text` as a QR code, `module` px per module: `{side, element}`, `side`
-  the element's width and height in px.
-  """
-  @spec render(String.t(), pos_integer()) :: {pos_integer(), term()}
-  def render(text, module) do
-    rows = text |> EQRCode.encode(:m) |> Map.fetch!(:matrix) |> runs()
+  @spec render(PictureRail.QR.runs(), pos_integer()) :: {pos_integer(), term()}
+  def render(rows, module) do
     side = (length(rows) + 2 * @quiet) * module
 
     lines =

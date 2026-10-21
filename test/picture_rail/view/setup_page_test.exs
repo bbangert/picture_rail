@@ -1,6 +1,7 @@
 defmodule PictureRail.View.SetupPageTest do
   use ExUnit.Case, async: true
 
+  alias PictureRail.App.Pairing
   alias PictureRail.{Settings, Setup}
   alias PictureRail.Setup.Secret
   alias PictureRail.View.SetupPage
@@ -128,11 +129,17 @@ defmodule PictureRail.View.SetupPageTest do
 
     connected = %{status: :connected, ip: "192.168.1.40", ssid: "Home"}
 
+    # as the :pairing controller exposes it, for a network
+    pairing = fn code, network ->
+      state = %{code: code, forget_failed?: false, address: "http://frame.local"}
+      Pairing.expose(state, %{network: network}, true)
+    end
+
     ctx =
       Map.merge(exposed(@immich), %{
         photos: nil,
         network: connected,
-        pairing: %{code: "01234567"},
+        pairing: pairing.("01234567", connected),
         portrait?: false,
         content_w: 1574,
         content_h: 782
@@ -149,11 +156,13 @@ defmodule PictureRail.View.SetupPageTest do
     assert Enum.count(blocks, &match?({:row, _, [_], _}, &1)) == 4
     assert Enum.any?(blocks, &match?({:heading, _, "Settings on your phone"}, &1))
 
-    # not connected, or no code yet: only the pills
-    for ctx <- [
-          %{ctx | network: %{connected | status: :disconnected}},
-          %{ctx | pairing: %{code: nil}}
+    # not connected (no QR code), or no code yet: only the pills
+    for pairing <- [
+          pairing.("01234567", %{connected | status: :disconnected}),
+          pairing.(nil, connected)
         ] do
+      ctx = %{ctx | pairing: pairing}
+      assert pairing.qr == nil
       assert [{:heading, _, "Settings"} | rows] = SetupPage.blocks(ctx, :setup)
       assert length(rows) == 4
     end
