@@ -242,6 +242,9 @@ defmodule PictureRail.View do
       portrait?: portrait? || false,
       panel: panel,
       ha: solve(App, :ha) || %{status: :unconfigured, slice: nil, states: %{}},
+      setup: solve(App, :setup),
+      settings: solve(App, :settings),
+      photos: solve(App, :photos),
       sliders: state.sliders
     })
   end
@@ -380,6 +383,19 @@ defmodule PictureRail.View do
 
   def handle_info(message, state) when message in [:back, :hide] do
     send_event(:panel, message, nil)
+    {:noreply, state}
+  end
+
+  # The Setup page: open a section, or an edit in the open one.
+  def handle_info({:setup_open, section}, state) do
+    send_event(:setup, :open, section)
+    send_event(:panel, :open, {:setup, section})
+    {:noreply, state}
+  end
+
+  def handle_info({:setup, event, payload}, state) do
+    send_event(:panel, :activity, nil)
+    send_event(:setup, event, payload)
     {:noreply, state}
   end
 

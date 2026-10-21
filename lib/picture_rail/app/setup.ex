@@ -1,0 +1,283 @@
+defmodule PictureRail.App.Setup do
+  @moduledoc """
+  `:setup` controller: the Setup page's editor, one section at a time (see
+  `PictureRail.Setup` for the sections and drafts).
+
+  Events from the view:
+
+    * `:open` - start editing a section, from what's saved (a section with
+      choices to pick from loads them when its source is set up)
+    * `:set` - `{id, value}`
+    * `:toggle` - flip a `:toggle` field (`id`)
+    * `:step` - `{id, 1 | -1}`: an `:integer` or `:seconds` field by a step
+    * `:toggle_choice` - `{id, value}`: pick or unpick a choice
+    * `:set_type` - switch the photo source's type (a fresh draft for it)
+    * `:load_choices` - (re)load a choices field's choices (`id`)
+    * `:test` - check the photo source with the draft
+    * `:save` - write the draft (`PictureRail.Settings.Watcher.update/2`);
+      validation errors land on their fields
+    * `:discard` - back to what's saved
+    * `:close` - stop editing
+
+  Loading choices, the check and saving run in tasks (the `:run`
+  callback), each tagged with its ref: a result for an editor that has
+  since moved on is dropped. The stored credentials only ever enter those
+  tasks (the `:stored` callback), never this state.
+
+  Exposes `%{section:, draft:, errors:, message:, choices:, check:,
+  saving?:, busy?:}`: `errors` by field id, `message` `{:ok | :error,
+  text}` for the section, `choices` by field id (`:idle`, `:loading`,
+  `{:ok, [{value, label}]}`, `{:error, text}`), `check` `nil`, `:running`,
+  `:ok` or `{:error, text}`. `busy?` (unsaved changes, or a task running)
+  keeps the panel up longer.
+  """
+  use Solve.Controller,
+    events: [
+      :open,
+      :set,
+      :toggle,
+      :step,
+      :toggle_choice,
+      :set_type,
+      :load_choices,
+      :test,
+      :save,
+      :discard,
+      :close
+    ]
+
+  require Logger
+
+  alias PictureRail.Setup
+  alias PictureRail.Setup.Field
+
+  @impl Solve.Controller
+  def init(_params, _dependencies), do: closed()
+
+  defp closed do
+    %{
+      section: nil,
+      draft: %{},
+      errors: %{},
+      message: nil,
+      choices: %{},
+      check: nil,
+      pending: %{}
+    }
+  end
+
+  def open(section, _state, deps, callbacks) do
+    state = editor(section, Setup.draft(section, public(deps)))
+
+    if section == :photo_source and configured?(deps, :photo_source),
+      do: load_all_choices(state, callbacks),
+      else: state
+  end
+
+  defp editor(section, draft), do: %{closed() | section: section, draft: draft}
+
+  def close(_payload, _state), do: closed()
+
+  def discard(_payload, %{section: nil} = state, _deps), do: state
+
+  def discard(_payload, state, deps),
+    do: %{
+      editor(state.section, Setup.draft(state.section, public(deps)))
+      | choices: state.choices
+    }
+
+  def set({id, value}, state), do: change(state, id, fn _old -> value end)
+  def toggle(id, state), do: change(state, id, &(!&1))
+
+  def step({id, direction}, state) when direction in [1, -1] do
+    case Setup.field(state.section, state.draft, id) do
+      %Field{type: type} = field when type in [:integer, :seconds] ->
+        change(state, id, &Setup.step(field, &1, direction))
+
+      _ ->
+        state
+    end
+  end
+
+  def toggle_choice({id, choice}, state), do: change(state, id, &Setup.toggle_choice(&1, choice))
+
+  def set_type(type, %{section: :photo_source}, _deps, callbacks) do
+    state = editor(:photo_source, Setup.draft(:photo_source, %{photo_source: %{"type" => type}}))
+    load_all_choices(state, callbacks)
+  end
+
+  def set_type(_type, state, _deps, _callbacks), do: state
+
+  def load_choices(id, %{section: section} = state, _deps, callbacks) when section != nil,
+    do: start_choices(state, id, callbacks)
+
+  def load_choices(_id, state, _deps, _callbacks), do: state
+
+  def test(_payload, %{section: :photo_source} = state, _deps, callbacks) do
+    case Setup.source(state.draft) do
+      nil ->
+        state
+
+      module ->
+        draft = state.draft
+
+        fun = fn ->
+          module.check(Setup.source_config(draft, callbacks.stored.("photo_source")))
+        end
+
+        %{run(state, :check, fun, callbacks) | check: :running}
+    end
+  end
+
+  def test(_payload, state, _deps, _callbacks), do: state
+
+  def save(_payload, %{section: nil} = state, _deps, _callbacks), do: state
+
+  def save(_payload, state, _deps, callbacks) do
+    values = Setup.values(state.section, state.draft)
+    %{run(state, :save, fn -> callbacks.save.(values) end, callbacks) | message: nil}
+  end
+
+  def handle_info(message, state), do: task_reply(message, state)
+
+  @doc false
+  # A task's reply (or its crash); anything else is ignored.
+  @spec task_reply(term(), map()) :: map()
+  def task_reply({ref, result}, state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+
+    case Map.pop(state.pending, ref) do
+      {nil, _pending} -> state
+      {job, pending} -> done(job, result, %{state | pending: pending})
+    end
+  end
+
+  def task_reply({:DOWN, ref, :process, _pid, reason}, state) do
+    case Map.pop(state.pending, ref) do
+      {nil, _pending} ->
+        state
+
+      {job, pending} ->
+        Logger.warning("Setup: #{inspect(job)} crashed: #{inspect(reason)}")
+        done(job, {:error, "Something went wrong"}, %{state | pending: pending})
+    end
+  end
+
+  def task_reply(_message, state), do: state
+
+  # -- Edits --
+
+  defp change(%{section: nil} = state, _id, _fun), do: state
+
+  defp change(state, id, fun) do
+    if Setup.field(state.section, state.draft, id) do
+      draft = Map.update(state.draft, id, fun.(nil), fun)
+      %{state | draft: draft, errors: Map.delete(state.errors, id), message: nil}
+    else
+      state
+    end
+  end
+
+  # -- Tasks --
+
+  defp load_all_choices(state, callbacks) do
+    for {name, %Field{type: {:choices, _}} = f} <- Setup.fields(state.section, state.draft),
+        reduce: state do
+      state -> start_choices(state, {name, f.key}, callbacks)
+    end
+  end
+
+  defp start_choices(%{section: :photo_source} = state, {_, key} = id, callbacks) do
+    case Setup.source(state.draft) do
+      nil ->
+        state
+
+      module ->
+        draft = state.draft
+
+        fun = fn ->
+          module.choices(key, Setup.source_config(draft, callbacks.stored.("photo_source")))
+        end
+
+        state = run(state, {:choices, id}, fun, callbacks)
+        %{state | choices: Map.put(state.choices, id, :loading)}
+    end
+  end
+
+  defp start_choices(state, _id, _callbacks), do: state
+
+  defp run(state, job, fun, callbacks) do
+    %{ref: ref} = callbacks.run.(fun)
+    # one of each job at a time: a newer one supersedes
+    pending = state.pending |> Enum.reject(fn {_ref, j} -> j == job end) |> Map.new()
+    %{state | pending: Map.put(pending, ref, job)}
+  end
+
+  defp done({:choices, id}, result, state) do
+    choices =
+      case result do
+        {:ok, list} when is_list(list) -> {:ok, list}
+        {:error, message} when is_binary(message) -> {:error, message}
+        other -> {:error, "Unexpected: #{inspect(other)}"}
+      end
+
+    %{state | choices: Map.put(state.choices, id, choices)}
+  end
+
+  defp done(:check, result, state) do
+    case result do
+      :ok -> %{state | check: :ok}
+      {:error, message} when is_binary(message) -> %{state | check: {:error, message}}
+      other -> %{state | check: {:error, "Unexpected: #{inspect(other)}"}}
+    end
+  end
+
+  defp done(:save, :ok, state) do
+    # typed secrets are saved: they show as set from here on
+    draft = Map.reject(state.draft, fn {_id, value} -> is_struct(value, Setup.Secret) end)
+    %{state | draft: draft, errors: %{}, message: {:ok, "Saved"}}
+  end
+
+  defp done(:save, {:error, messages}, state) when is_list(messages) do
+    {errors, rest} = Setup.field_errors(state.section, state.draft, messages)
+
+    message =
+      case rest do
+        [] -> "Check the fields marked"
+        rest -> Enum.join(rest, "; ")
+      end
+
+    %{state | errors: errors, message: {:error, message}}
+  end
+
+  defp done(:save, {:error, message}, state),
+    do: %{state | message: {:error, to_string(message)}}
+
+  # -- Exposed --
+
+  defp public(%{settings: %{settings: public}}), do: public
+  defp public(_deps), do: PictureRail.Settings.public(PictureRail.Settings.defaults())
+
+  defp configured?(%{settings: %{configured: configured}}, key),
+    do: Map.get(configured, key, false)
+
+  defp configured?(_deps, _key), do: false
+
+  @impl Solve.Controller
+  def expose(state, deps, _params) do
+    busy? =
+      state.section != nil and
+        (state.pending != %{} or state.draft != Setup.draft(state.section, public(deps)))
+
+    %{
+      section: state.section,
+      draft: state.draft,
+      errors: state.errors,
+      message: state.message,
+      choices: state.choices,
+      check: state.check,
+      saving?: :save in Map.values(state.pending),
+      busy?: busy?
+    }
+  end
+end

@@ -19,7 +19,9 @@ defmodule PictureRail.App.Panel do
     * `:hide` - hide now
 
   The panel hides after `panel.timeout_ms` (settings) without activity and
-  comes back fresh: on the overview, first pages.
+  comes back fresh: on the overview, first pages. On a Setup page with
+  something going on (unsaved changes, an album list loading: `busy?` from
+  `:setup`) it waits five minutes instead.
 
   Exposes `%{visible?: boolean, view: view, depth: n, page: n, nav_page: n}`.
   """
@@ -72,12 +74,20 @@ defmodule PictureRail.App.Panel do
   # earlier one is ignored.
   defp restart_timer(state, deps) do
     token = make_ref()
-    Process.send_after(self(), {:timeout, token}, timeout_ms(deps))
+    Process.send_after(self(), {:timeout, token}, timeout_ms(state, deps))
     %{state | token: token}
   end
 
-  defp timeout_ms(%{settings: %{settings: %{panel: %{timeout_ms: ms}}}}), do: ms
-  defp timeout_ms(_deps), do: PictureRail.Settings.defaults().panel.timeout_ms
+  @busy_timeout_ms 300_000
+
+  @doc false
+  @spec timeout_ms(map(), map()) :: pos_integer()
+  def timeout_ms(%{stack: [{view, _page} | _]}, %{setup: %{busy?: true}})
+      when view == :setup or (is_tuple(view) and elem(view, 0) == :setup),
+      do: @busy_timeout_ms
+
+  def timeout_ms(_state, %{settings: %{settings: %{panel: %{timeout_ms: ms}}}}), do: ms
+  def timeout_ms(_state, _deps), do: PictureRail.Settings.defaults().panel.timeout_ms
 
   @impl Solve.Controller
   def expose(state, _dependencies, _params) do

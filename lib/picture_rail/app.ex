@@ -9,6 +9,7 @@ defmodule PictureRail.App do
   | `:panel` | whether the panel is up, its view, the idle timeout |
   | `:photos` | the photo source's status and counts |
   | `:slideshow` | the photo on screen and the one fading out |
+  | `:setup` | the Setup page's editor |
   | `:ha` | Home Assistant status and the panel view's slice of the model |
 
   Outside processes (the settings watcher, the orientation sensor, the
@@ -17,12 +18,28 @@ defmodule PictureRail.App do
   """
   use Solve
 
+  alias PictureRail.Settings.Watcher
+
   @impl Solve
   def controllers do
     [
       controller!(name: :settings, module: PictureRail.App.Settings),
       controller!(name: :orientation, module: PictureRail.App.Orientation),
-      controller!(name: :panel, module: PictureRail.App.Panel, dependencies: [:settings]),
+      controller!(
+        name: :setup,
+        module: PictureRail.App.Setup,
+        dependencies: [:settings],
+        callbacks: %{
+          run: &run_task/1,
+          stored: &stored/1,
+          save: &Watcher.update/1
+        }
+      ),
+      controller!(
+        name: :panel,
+        module: PictureRail.App.Panel,
+        dependencies: [:settings, :setup]
+      ),
       controller!(name: :photos, module: PictureRail.App.Photos),
       controller!(
         name: :slideshow,
@@ -52,6 +69,13 @@ defmodule PictureRail.App do
       Hassock.call_service(PictureRail.HA.Connection, call)
     end)
   end
+
+  # Setup's slow work (talking to a photo source, saving); the `:setup`
+  # controller gets the task's reply.
+  defp run_task(fun), do: Task.Supervisor.async_nolink(PictureRail.TaskSup, fun)
+
+  # A saved section with its credentials, read inside those tasks only.
+  defp stored(name), do: PictureRail.Settings.values(PictureRail.Settings.current(), name)
 
   # The source never waits on the network; if none is running, there's
   # nothing to show.

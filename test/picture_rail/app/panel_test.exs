@@ -63,4 +63,14 @@ defmodule PictureRail.App.PanelTest do
     refute exposed(state).visible?
     refute_receive {:timeout, _}
   end
+
+  test "a busy Setup page holds the panel for five minutes" do
+    deps = %{settings: %{settings: %{panel: %{timeout_ms: 30_000}}}, setup: %{busy?: true}}
+    setup = %{stack: [{{:setup, :display}, 0}]}
+
+    assert Panel.timeout_ms(setup, deps) == 300_000
+    assert Panel.timeout_ms(%{stack: [{:setup, 0}]}, deps) == 300_000
+    assert Panel.timeout_ms(setup, %{deps | setup: %{busy?: false}}) == 30_000
+    assert Panel.timeout_ms(%{stack: []}, deps) == 30_000
+  end
 end

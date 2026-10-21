@@ -19,7 +19,8 @@ defmodule PictureRail.View.Panel do
   use Emerge.UI
 
   alias PictureRail.HA.{Index, Overview}
-  alias PictureRail.View.{EnergyPage, Format, LCARS, Theme}
+  alias PictureRail.Setup
+  alias PictureRail.View.{EnergyPage, Format, LCARS, SetupPage, Theme}
 
   @toggle ~w(light switch fan input_boolean)
   @run %{
@@ -68,18 +69,26 @@ defmodule PictureRail.View.Panel do
   def waiting_message(:unconfigured), do: "Home Assistant isn't set up"
   def waiting_message(_connecting), do: "Loading"
 
+  @doc "Whether a panel view is one of the Setup pages."
+  @spec setup_view?(term()) :: boolean()
+  def setup_view?(:setup), do: true
+  def setup_view?({:setup, _section}), do: true
+  def setup_view?(_view), do: false
+
   @doc "Whether an entity has a detail view (a chevron on its pill)."
   @spec detail?(String.t()) :: boolean()
   def detail?(entity_id), do: Index.domain(entity_id) in @details
 
   @doc """
   The panel for the oriented screen `size`. `ha` and `panel` are the
-  controllers' exposed maps; `sliders` holds slider values being dragged
+  controllers' exposed maps (and `setup`, `settings` and `photos` for the
+  Setup pages); `sliders` holds slider values being dragged
   (`%{{entity_id, kind} => value}`).
   """
   @spec render(map()) :: term()
   def render(%{size: {w, h}} = ctx) do
-    live? = ctx.ha.status == :connected
+    # the Setup pages work whatever Home Assistant is doing
+    live? = ctx.ha.status == :connected or setup_view?(ctx.panel.view)
     ctx = Map.merge(ctx, %{w: w, h: h, live?: live?, frame: if(live?, do: :orange, else: :red)})
 
     el(
@@ -360,8 +369,11 @@ defmodule PictureRail.View.Panel do
 
   # -- Navigation --
 
-  # From the `:ha` controller (`PictureRail.HA.Overview.nav/1`).
-  defp nav_items(ctx), do: Map.get(ctx.ha, :nav) || []
+  @doc false
+  # From the `:ha` controller (`PictureRail.HA.Overview.nav/1`), then Setup,
+  # which is there whether or not Home Assistant is.
+  @spec nav_items(map()) :: [tuple()]
+  def nav_items(ctx), do: (Map.get(ctx.ha, :nav) || []) ++ [{:view, :setup, "Setup"}]
 
   @nav_colors [:lilac, :bluey, :mauve, :peach, :sky, :almond]
 
@@ -429,10 +441,14 @@ defmodule PictureRail.View.Panel do
     LCARS.block(
       Theme.hex(Enum.at(@nav_colors, rem(i, length(@nav_colors)))),
       LCARS.fit(label, 16),
-      active?: view == ctx.panel.view,
+      active?: nav_active?(view, ctx.panel.view),
       attrs: [Event.on_press({:goto, view})]
     )
   end
+
+  # A Setup section is under Setup in the navigation.
+  defp nav_active?(:setup, current), do: setup_view?(current)
+  defp nav_active?(view, current), do: view == current
 
   defp nav_step(label, message, enabled?) do
     LCARS.block(Theme.hex(:orange), label,
@@ -496,7 +512,8 @@ defmodule PictureRail.View.Panel do
 
         LCARS.pill(
           label: label.(item),
-          fill: Theme.color(if(view == ctx.panel.view, do: Theme.hex(:white), else: color)),
+          fill:
+            Theme.color(if(nav_active?(view, ctx.panel.view), do: Theme.hex(:white), else: color)),
           height: Theme.size(:nav),
           attrs: [Event.on_press({:goto, view})]
         )
@@ -544,6 +561,8 @@ defmodule PictureRail.View.Panel do
   defp title(:media, _slice), do: "Media"
   defp title(:devices, _slice), do: "Devices"
   defp title(:energy, _slice), do: "Energy"
+  defp title(:setup, _slice), do: "Setup"
+  defp title({:setup, section}, _slice), do: Setup.label(section)
   defp title({:summary, kind}, _slice), do: @summary_labels[kind]
   defp title({:area, _}, %{area: area}), do: area.name
   defp title({:entity, id}, _slice), do: Overview.name(Overview.source(), id)
@@ -696,6 +715,10 @@ defmodule PictureRail.View.Panel do
       gauges ++
       [hourly, {:row, 300, [EnergyPage.chart(summary, ctx.content_w, 300)], hourly}]
   end
+
+  defp blocks(ctx, view, _slice)
+       when view == :setup or (is_tuple(view) and elem(view, 0) == :setup),
+       do: SetupPage.blocks(ctx, view)
 
   defp blocks(ctx, _view, slice) when slice in [nil, :loading],
     do: empty(ctx, waiting_message(ctx.ha.status))
