@@ -121,13 +121,16 @@ defmodule PictureRail.View.PanelTest do
     refute_received {:built, _}
   end
 
-  test "a long list's page is drawn from its item functions" do
+  test "a long list builds only the page shown" do
     ids = for n <- 1..60, do: "light.l#{n}"
 
     states =
       Map.new(ids, &{&1, %Hassock.EntityState{entity_id: &1, state: "on", attributes: %{}}})
 
     names = Map.new(Enum.with_index(ids, 1), fn {id, n} -> {{id, :full}, "Lamp #{n}"} end)
+    # a name that can't be drawn, on the last page: building that pill
+    # raises, so page 0 renders only if off-page pills aren't built
+    names = Map.put(names, {"light.l60", :full}, {:not, :a, :name})
     slice = %{sections: [%{title: "Lights", groups: [%{title: nil, entity_ids: ids}]}]}
 
     ctx = %{
