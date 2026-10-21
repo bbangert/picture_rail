@@ -67,11 +67,18 @@ defmodule PictureRail.SetupTest do
              "photo_source" => %{
                "type" => "immich",
                "url" => "https://photos.example.com",
-               "album_ids" => ["a1"],
-               # albums by name (hand-edited files) give way to the ones shown
-               "album_names" => nil
+               "album_ids" => ["a1"]
              }
            }
+
+    # albums by name (hand-edited files) give way to albums chosen, and
+    # only then
+    assert Setup.values(:photo_source, draft, draft)["photo_source"] ==
+             Setup.values(:photo_source, draft)["photo_source"]
+
+    chosen = Map.put(draft, {"photo_source", "album_ids"}, ["a2"])
+    assert Setup.values(:photo_source, chosen, draft)["photo_source"]["album_names"] == nil
+    assert Map.has_key?(Setup.values(:photo_source, chosen, draft)["photo_source"], "album_names")
 
     typed = Map.put(draft, {"photo_source", "api_key"}, %Secret{value: "new"})
     assert Setup.values(:photo_source, typed)["photo_source"]["api_key"] == "new"

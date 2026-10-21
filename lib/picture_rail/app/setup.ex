@@ -287,8 +287,9 @@ defmodule PictureRail.App.Setup do
 
   def save(_payload, %{section: nil} = state, _deps, _callbacks), do: state
 
-  def save(_payload, state, _deps, callbacks) do
-    values = Setup.values(state.section, state.draft)
+  def save(_payload, state, deps, callbacks) do
+    original = Setup.draft(state.section, public(deps))
+    values = Setup.values(state.section, state.draft, original)
     %{run(state, :save, fn -> callbacks.save.(values) end, callbacks) | message: nil}
   end
 

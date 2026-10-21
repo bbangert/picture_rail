@@ -213,13 +213,19 @@ defmodule PictureRail.Settings.Watcher do
     end)
   end
 
-  # Files from before photo sources: `immich` is the Immich photo source.
+  # Files from before photo sources: `immich` is the Immich photo source,
+  # unless there's a `photo_source` (`null` isn't one, as for the parser).
   defp migrate(%{"immich" => legacy} = map) do
-    map
-    |> Map.delete("immich")
-    |> Map.put_new_lazy("photo_source", fn ->
-      if is_map(legacy), do: Map.put(legacy, "type", "immich"), else: legacy
-    end)
+    map = Map.delete(map, "immich")
+
+    case map["photo_source"] do
+      nil ->
+        source = if is_map(legacy), do: Map.put(legacy, "type", "immich"), else: legacy
+        Map.put(map, "photo_source", source)
+
+      _source ->
+        map
+    end
   end
 
   defp migrate(map), do: map

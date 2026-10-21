@@ -24,8 +24,8 @@ defmodule PictureRail.Setup.Field do
   Fields with `ui?: false` are read from the file but never shown (older
   keys kept for files edited by hand). One with `superseded_by: key` is an
   older way of setting that field: a save from the Setup page or the web
-  page, which shows only the newer field, removes it, so what's shown is
-  what's used.
+  page that changes the newer field removes it, so what's shown is what's
+  used (`PictureRail.Setup.values/3`).
 
   A stored secret is only ever sent to the server it was given for: see
   `same_server?/3`. A toggle with `secures?: true` (checking the server's

@@ -221,9 +221,13 @@ defmodule PictureRail.Setup do
   The draft as `PictureRail.Settings.Watcher.update/2` takes it: values by
   file section, typed secrets unwrapped, untouched (or emptied) ones left
   out so the stored value is kept.
+
+  With `original`, the draft it was edited from: a hidden older field
+  (`superseded_by`) is removed when the field superseding it was changed,
+  and only then (a list that couldn't load leaves both as they were).
   """
-  @spec values(section(), draft()) :: %{String.t() => map()}
-  def values(section, draft) do
+  @spec values(section(), draft(), draft() | nil) :: %{String.t() => map()}
+  def values(section, draft, original \\ nil) do
     base =
       for name <- file_sections(section), into: %{}, do: {name, %{}}
 
@@ -246,14 +250,15 @@ defmodule PictureRail.Setup do
         end
       end)
 
-    drop_superseded(values, section, draft)
+    if original, do: drop_superseded(values, section, draft, original), else: values
   end
 
   # A hidden older field the save replaces is removed (`nil`).
-  defp drop_superseded(values, section, draft) do
+  defp drop_superseded(values, section, draft, original) do
     for {name, %Field{superseded_by: newer} = f} <- all_fields(section, draft),
         newer != nil,
         Map.has_key?(values[name] || %{}, newer),
+        draft[{name, newer}] != original[{name, newer}],
         reduce: values,
         do: (acc -> put_in(acc, [name, f.key], nil))
   end

@@ -137,7 +137,9 @@ defmodule PictureRail.Web.Router do
   end
 
   defp save(conn, section, draft, settings, watcher) do
-    case Watcher.update(Setup.values(section, draft), watcher) do
+    original = Setup.draft(section, Settings.public(settings))
+
+    case Watcher.update(Setup.values(section, draft, original), watcher) do
       :ok ->
         redirect(conn, "/settings/#{Form.slug(section)}?saved=1")
 

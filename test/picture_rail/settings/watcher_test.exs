@@ -177,20 +177,45 @@ defmodule PictureRail.Settings.WatcherTest do
       assert json["photo_source"]["api_key"] == "new-key"
     end
 
-    test "saving albums replaces albums picked by name", %{tmp_dir: dir} do
+    test "choosing albums replaces albums picked by name; other saves keep them", %{
+      tmp_dir: dir
+    } do
       path = Path.join(dir, "picture_rail.json")
-      write(path, %{"photo_source" => Map.put(@immich, "album_names", ["Old"])})
+      legacy = %{@immich | "album_ids" => []} |> Map.put("album_names", ["Old"])
+      write(path, %{"photo_source" => legacy})
       watcher = start(path)
       assert_receive {:notified, _, :ok}
-
-      # as the Setup page saves it, albums untouched
       draft = Setup.draft(:photo_source, Settings.public(Watcher.current(watcher)))
-      values = Setup.values(:photo_source, draft)
-      assert :ok = Watcher.update(values, watcher)
 
+      # a new key, the album list not shown (it couldn't load): kept
+      keyed = Map.put(draft, {"photo_source", "api_key"}, %PictureRail.Setup.Secret{value: "k2"})
+      assert :ok = Watcher.update(Setup.values(:photo_source, keyed, draft), watcher)
+      json = path |> File.read!() |> Jason.decode!()
+      assert json["photo_source"]["album_names"] == ["Old"]
+      assert json["photo_source"]["api_key"] == "k2"
+
+      # albums chosen: they replace the names
+      chosen = Map.put(draft, {"photo_source", "album_ids"}, ["a2"])
+      assert :ok = Watcher.update(Setup.values(:photo_source, chosen, draft), watcher)
       json = path |> File.read!() |> Jason.decode!()
       refute Map.has_key?(json["photo_source"], "album_names")
-      assert Watcher.current(watcher).photo_source.config["album_names"] == []
+      assert json["photo_source"]["album_ids"] == ["a2"]
+    end
+
+    test "a null photo_source next to a legacy immich section: the immich one", %{
+      tmp_dir: dir
+    } do
+      path = Path.join(dir, "picture_rail.json")
+      write(path, %{"immich" => Map.delete(@immich, "type"), "photo_source" => nil})
+      watcher = start(path)
+      assert_receive {:notified, settings, :ok}
+      assert settings.photo_source.config["api_key"] == "secret-key"
+
+      assert :ok = Watcher.update(%{"slideshow" => %{"interval_ms" => 8_000}}, watcher)
+      json = path |> File.read!() |> Jason.decode!()
+      assert json["photo_source"]["api_key"] == "secret-key"
+      assert json["photo_source"]["type"] == "immich"
+      refute Map.has_key?(json, "immich")
     end
 
     test "a nil section is removed, a nil key goes back to its default", %{tmp_dir: dir} do
