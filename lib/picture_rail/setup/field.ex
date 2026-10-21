@@ -23,6 +23,9 @@ defmodule PictureRail.Setup.Field do
 
   Fields with `ui?: false` are read from the file but never shown (older
   keys kept for files edited by hand).
+
+  For the text types, `max` is the most characters the Setup page lets you
+  type (512 when unset); it isn't checked in the file.
   """
 
   @enforce_keys [:key, :label, :type]
@@ -119,6 +122,11 @@ defmodule PictureRail.Setup.Field do
   defp describe_min(min), do: "must be an integer of at least #{min}"
 
   defp trim_url(url), do: String.trim_trailing(url, "/")
+
+  @doc "The most characters a text field takes on the Setup page."
+  @spec max_length(t()) :: pos_integer()
+  def max_length(%__MODULE__{max: max}) when is_integer(max), do: max
+  def max_length(%__MODULE__{}), do: 512
 
   @doc "The keys of the secret fields."
   @spec secret_keys([t()]) :: [String.t()]

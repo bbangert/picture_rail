@@ -14,7 +14,7 @@ defmodule PictureRail.View.SetupPage do
 
   alias PictureRail.{PhotoSource, Setup}
   alias PictureRail.Setup.{Field, Secret}
-  alias PictureRail.View.{LCARS, Theme}
+  alias PictureRail.View.{Keyboard, LCARS, Theme}
 
   @colors %{photo_source: :sky, home_assistant: :lilac, display: :peach}
   @row_h 84
@@ -213,7 +213,7 @@ defmodule PictureRail.View.SetupPage do
     [field_row_block(label, controls, error)]
   end
 
-  defp field_blocks(_ctx, {:text, _id, label, shown, _set?, error}, color) do
+  defp field_blocks(_ctx, {:text, id, label, shown, _set?, error}, color) do
     value =
       el(
         [
@@ -225,9 +225,14 @@ defmodule PictureRail.View.SetupPage do
         text(LCARS.fit(shown || "not set", 40))
       )
 
-    # the keyboard that edits it comes with the next step of setup
     edit =
-      LCARS.pill(label: "EDIT", fill: Theme.color(Theme.dim(color)), height: 64, width: px(140))
+      LCARS.pill(
+        label: "EDIT",
+        color: color,
+        height: 64,
+        width: px(140),
+        attrs: [Event.on_press({:setup, :edit, id})]
+      )
 
     [field_row_block(label, [value, edit], error)]
   end
@@ -341,6 +346,149 @@ defmodule PictureRail.View.SetupPage do
       end
 
     check ++ message
+  end
+
+  # -- The field editor --
+
+  @doc """
+  The full-screen editor for the field the keyboard is open on
+  (`setup.editing`): its label, the field, and the keyboard, sized for the
+  oriented screen `size`.
+
+  A plain field (or a secret shown in clear) is Emerge's `Input.text`,
+  keyed on `setup.edits` so it mounts focused each time the editor opens;
+  a masked secret is drawn as bullets, typed through app events.
+  """
+  @spec editor(map()) :: term()
+  def editor(%{size: {w, h}, setup: setup} = ctx) do
+    id = setup.editing
+    field = Setup.field(setup.section, setup.draft, id)
+    secret? = field.type == :secret
+    mode = if secret? and not setup.reveal?, do: :masked, else: :native
+
+    pad = 16
+    gap = 14
+    header_h = 64
+    field_h = 88
+    inner_w = w - 2 * pad
+    rows = length(Keyboard.layout(setup.keyboard.layer, setup.keyboard.shift, field.type, mode))
+    avail = h - 2 * pad - header_h - field_h - 2 * gap - (rows - 1) * 8
+    key_h = Kernel.min(110, Float.floor(avail / rows))
+
+    reveal =
+      if secret?,
+        do: [
+          Keyboard.key(
+            :reveal,
+            if(setup.reveal?, do: "HIDE", else: "SHOW"),
+            160,
+            56,
+            Theme.hex(:bluey)
+          )
+        ],
+        else: []
+
+    header =
+      row([width(fill()), height(px(header_h)), spacing(16)], [
+        column([width(fill()), center_y(), spacing(2)], [
+          el(
+            [Font.size(Theme.size(:heading) + 6), Font.color(Theme.color(:peach))],
+            text(String.upcase(field.label))
+          ),
+          el(
+            [
+              Font.family("Noto Sans"),
+              Font.size(Theme.size(:small) - 3),
+              Font.color(Theme.color(:almond))
+            ],
+            text(field.help || "")
+          )
+        ])
+        | reveal
+      ])
+
+    el(
+      [
+        key(:setup_editor),
+        width(fill()),
+        height(fill()),
+        padding(pad),
+        Background.color(Theme.color(:black)),
+        Font.family("Antonio")
+      ],
+      column([width(fill()), spacing(gap)], [
+        header,
+        field_box(setup, id, set?(ctx, id), mode, field_h),
+        Keyboard.render(setup.keyboard, field.type, mode, inner_w, key_h)
+      ])
+    )
+  end
+
+  defp set?(%{settings: %{settings: public}, setup: setup}, id),
+    do: Setup.secret_set?(id, setup.draft, public)
+
+  defp set?(_ctx, _id), do: false
+
+  defp field_box(setup, id, _set?, :native, field_h) do
+    value =
+      case setup.draft[id] do
+        %Secret{value: v} -> v
+        v when is_binary(v) -> v
+        _ -> ""
+      end
+
+    el(
+      [width(fill())],
+      Input.text(
+        [
+          key({:field, setup.edits}),
+          focus_on_mount(),
+          width(fill()),
+          height(px(field_h)),
+          padding_xy(24, 0),
+          Background.color(Theme.color(0x1A1A24)),
+          Border.rounded(14),
+          Border.width(3),
+          Border.color(Theme.color(:orange)),
+          Font.family("Noto Sans"),
+          Font.size(36),
+          Font.color(Theme.color(:white)),
+          Event.on_change({:setup, :typed, id})
+        ],
+        value
+      )
+    )
+  end
+
+  defp field_box(setup, id, set?, :masked, field_h) do
+    typed =
+      case setup.draft[id] do
+        %Secret{value: v} -> v
+        _ -> ""
+      end
+
+    {shown, color} =
+      cond do
+        typed != "" -> {String.duplicate("•", String.length(typed)) <> "▏", :white}
+        set? -> {"•••• set, type to replace", :grey}
+        true -> {"type it", :grey}
+      end
+
+    el(
+      [
+        width(fill()),
+        height(px(field_h)),
+        padding_xy(24, 0),
+        Background.color(Theme.color(0x1A1A24)),
+        Border.rounded(14),
+        Border.width(3),
+        Border.color(Theme.color(:orange)),
+        Font.family("Noto Sans"),
+        Font.size(36),
+        Font.color(Theme.color(color))
+      ],
+      el([center_y()], text(shown))
+    )
   end
 
   # -- Pieces --

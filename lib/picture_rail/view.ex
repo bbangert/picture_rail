@@ -35,7 +35,7 @@ defmodule PictureRail.View do
   require Logger
 
   alias PictureRail.App
-  alias PictureRail.View.{Config, Panel, Status}
+  alias PictureRail.View.{Config, Panel, SetupPage, Status}
 
   @slider_send_ms 250
   # how far a held finger may drift and still count as a long press
@@ -237,7 +237,7 @@ defmodule PictureRail.View do
     {w, h} = state.size || {1920, 1080}
     portrait? = orientation && orientation.portrait?
 
-    Panel.render(%{
+    ctx = %{
       size: if(portrait?, do: {h, w}, else: {w, h}),
       portrait?: portrait? || false,
       panel: panel,
@@ -246,7 +246,12 @@ defmodule PictureRail.View do
       settings: solve(App, :settings),
       photos: solve(App, :photos),
       sliders: state.sliders
-    })
+    }
+
+    # the keyboard takes the whole screen while a Setup field is edited
+    if Panel.setup_view?(panel.view) and match?(%{editing: id} when id != nil, ctx.setup),
+      do: SetupPage.editor(ctx),
+      else: Panel.render(ctx)
   end
 
   # Rotation spike: a target in each corner and the last one tapped, to
@@ -390,6 +395,13 @@ defmodule PictureRail.View do
   def handle_info({:setup_open, section}, state) do
     send_event(:setup, :open, section)
     send_event(:panel, :open, {:setup, section})
+    {:noreply, state}
+  end
+
+  # the native field's text (Emerge appends the value to the message)
+  def handle_info({:setup, :typed, id, value}, state) do
+    send_event(:panel, :activity, nil)
+    send_event(:setup, :set, {id, value})
     {:noreply, state}
   end
 

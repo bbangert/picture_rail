@@ -18,6 +18,18 @@ defmodule PictureRail.App.Setup do
       validation errors land on their fields
     * `:discard` - back to what's saved
     * `:close` - stop editing
+    * `:edit` - open the keyboard on a text field (`id`); a secret starts
+      empty (the stored one is never shown) and is held as a
+      `PictureRail.Setup.Secret`
+    * `:kb` - a keyboard key that's the app's (`PictureRail.View.Keyboard`):
+      shift, layers, `:done` (keep the typed value), `:cancel` (put back
+      the value from before), and every key of a masked secret
+    * `:reveal` - show the secret being typed in clear (a native field),
+      or mask it again
+
+  While the keyboard is open, `:set` from the native field is cut to the
+  field's `PictureRail.Setup.Field.max_length/1` (the field re-renders
+  with the shorter value) and ends a one-shot shift.
 
   Loading choices, the check and saving run in tasks (the `:run`
   callback), each tagged with its ref: a result for an editor that has
@@ -25,7 +37,10 @@ defmodule PictureRail.App.Setup do
   tasks (the `:stored` callback), never this state.
 
   Exposes `%{section:, draft:, errors:, message:, choices:, check:,
-  saving?:, busy?:}`: `errors` by field id, `message` `{:ok | :error,
+  saving?:, busy?:, editing:, keyboard:, reveal?:, edits:}`: `editing` the
+  id the keyboard is open on, `keyboard` its layer and shift, `edits`
+  counts keyboard openings (the field is keyed on it, so it mounts
+  focused); `errors` by field id, `message` `{:ok | :error,
   text}` for the section, `choices` by field id (`:idle`, `:loading`,
   `{:ok, [{value, label}]}`, `{:error, text}`), `check` `nil`, `:running`,
   `:ok` or `{:error, text}`. `busy?` (unsaved changes, or a task running)
@@ -43,13 +58,17 @@ defmodule PictureRail.App.Setup do
       :test,
       :save,
       :discard,
-      :close
+      :close,
+      :edit,
+      :kb,
+      :reveal
     ]
 
   require Logger
 
   alias PictureRail.Setup
-  alias PictureRail.Setup.Field
+  alias PictureRail.Setup.{Field, Secret}
+  alias PictureRail.View.Keyboard
 
   @impl Solve.Controller
   def init(_params, _dependencies), do: closed()
@@ -62,7 +81,12 @@ defmodule PictureRail.App.Setup do
       message: nil,
       choices: %{},
       check: nil,
-      pending: %{}
+      pending: %{},
+      editing: nil,
+      before: nil,
+      keyboard: Keyboard.new(),
+      reveal?: false,
+      edits: 0
     }
   end
 
@@ -86,6 +110,15 @@ defmodule PictureRail.App.Setup do
       | choices: state.choices
     }
 
+  def set({id, value}, %{editing: id} = state) when is_binary(value) do
+    field = Setup.field(state.section, state.draft, id)
+    value = String.slice(value, 0, Field.max_length(field))
+    longer? = String.length(value) > String.length(text_of(state.draft[id]))
+    value = if field.type == :secret, do: %Secret{value: value}, else: value
+    state = change(state, id, fn _old -> value end)
+    if longer?, do: %{state | keyboard: Keyboard.typed(state.keyboard)}, else: state
+  end
+
   def set({id, value}, state), do: change(state, id, fn _old -> value end)
   def toggle(id, state), do: change(state, id, &(!&1))
 
@@ -100,6 +133,81 @@ defmodule PictureRail.App.Setup do
   end
 
   def toggle_choice({id, choice}, state), do: change(state, id, &Setup.toggle_choice(&1, choice))
+
+  def edit(id, %{section: section} = state) when section != nil do
+    case Setup.field(section, state.draft, id) do
+      %Field{type: type} when type in [:text, :url, :secret] ->
+        before = Map.fetch(state.draft, id)
+
+        draft =
+          if type == :secret and not is_struct(state.draft[id], Secret),
+            do: Map.put(state.draft, id, %Secret{}),
+            else: state.draft
+
+        %{
+          state
+          | draft: draft,
+            editing: id,
+            before: before,
+            keyboard: Keyboard.new(),
+            reveal?: false,
+            edits: state.edits + 1
+        }
+
+      _ ->
+        state
+    end
+  end
+
+  def edit(_id, state), do: state
+
+  def kb(_key, %{editing: nil} = state), do: state
+
+  def kb(:shift, state),
+    do: %{state | keyboard: Keyboard.press_shift(state.keyboard, now())}
+
+  def kb({:layer, layer}, state), do: %{state | keyboard: Keyboard.layer(state.keyboard, layer)}
+
+  def kb(:reveal, state), do: reveal(nil, state)
+
+  def kb(:done, state), do: %{state | editing: nil, before: nil, reveal?: false}
+
+  def kb(:cancel, %{editing: id} = state) do
+    draft =
+      case state.before do
+        {:ok, value} -> Map.put(state.draft, id, value)
+        :error -> Map.delete(state.draft, id)
+      end
+
+    %{state | draft: draft, editing: nil, before: nil, reveal?: false}
+  end
+
+  # a masked secret's keys
+  def kb(key, %{editing: id, reveal?: false} = state) do
+    case Setup.field(state.section, state.draft, id) do
+      %Field{type: :secret} = field ->
+        value = Keyboard.edit(text_of(state.draft[id]), key, Field.max_length(field))
+        state = change(state, id, fn _old -> %Secret{value: value} end)
+        typed? = match?({:char, _}, key) or key == :space
+        if typed?, do: %{state | keyboard: Keyboard.typed(state.keyboard)}, else: state
+
+      _ ->
+        state
+    end
+  end
+
+  def kb(_key, state), do: state
+
+  def reveal(_payload, %{editing: id} = state) when id != nil,
+    do: %{state | reveal?: not state.reveal?, edits: state.edits + 1}
+
+  def reveal(_payload, state), do: state
+
+  defp text_of(%Secret{value: value}), do: value
+  defp text_of(value) when is_binary(value), do: value
+  defp text_of(_value), do: ""
+
+  defp now, do: System.monotonic_time(:millisecond)
 
   def set_type(type, %{section: :photo_source}, _deps, callbacks) do
     state = editor(:photo_source, Setup.draft(:photo_source, %{photo_source: %{"type" => type}}))
@@ -267,7 +375,8 @@ defmodule PictureRail.App.Setup do
   def expose(state, deps, _params) do
     busy? =
       state.section != nil and
-        (state.pending != %{} or state.draft != Setup.draft(state.section, public(deps)))
+        (state.editing != nil or state.pending != %{} or
+           state.draft != Setup.draft(state.section, public(deps)))
 
     %{
       section: state.section,
@@ -277,7 +386,11 @@ defmodule PictureRail.App.Setup do
       choices: state.choices,
       check: state.check,
       saving?: :save in Map.values(state.pending),
-      busy?: busy?
+      busy?: busy?,
+      editing: state.editing,
+      keyboard: state.keyboard,
+      reveal?: state.reveal?,
+      edits: state.edits
     }
   end
 end

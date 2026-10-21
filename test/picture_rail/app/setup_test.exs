@@ -187,4 +187,78 @@ defmodule PictureRail.App.SetupTest do
     refute inspect(exposed(state, deps)) =~ "typed-key"
     refute inspect(exposed(state, deps)) =~ "secret-key"
   end
+
+  describe "the keyboard" do
+    setup do
+      deps = deps(%{"photo_source" => @immich})
+      state = %{open(:home_assistant, deps, callbacks()) | pending: %{}}
+      %{deps: deps, state: Controller.set({{"home_assistant", "url"}, "http://ha"}, state)}
+    end
+
+    test "edit, typing, cancel puts the old value back", %{state: state, deps: deps} do
+      url = {"home_assistant", "url"}
+      state = Controller.edit(url, state)
+      assert %{editing: ^url, edits: 1} = exposed(state, deps)
+
+      state = Controller.set({url, "http://ha.lan"}, state)
+      assert state.draft[url] == "http://ha.lan"
+
+      cancelled = Controller.kb(:cancel, state)
+      assert cancelled.draft[url] == "http://ha"
+      assert cancelled.editing == nil
+
+      done = Controller.kb(:done, state)
+      assert done.draft[url] == "http://ha.lan"
+      assert done.editing == nil
+    end
+
+    test "typed text is cut to the field's limit and ends a one-shot shift", %{state: state} do
+      url = {"home_assistant", "url"}
+      state = state |> then(&Controller.edit(url, &1)) |> then(&Controller.kb(:shift, &1))
+      assert state.keyboard.shift == :once
+
+      state = Controller.set({url, "http://haA"}, state)
+      assert state.keyboard.shift == :off
+
+      long = String.duplicate("x", 600)
+      assert String.length(Controller.set({url, long}, state).draft[url]) == 512
+    end
+
+    test "a masked secret starts empty and is typed through key events", %{
+      state: state,
+      deps: deps
+    } do
+      token = {"home_assistant", "token"}
+      state = Controller.edit(token, state)
+      assert state.draft[token] == %Secret{value: ""}
+
+      state =
+        Enum.reduce([{:char, "a"}, {:char, "b"}, :space, :backspace, {:char, "c"}], state, fn key,
+                                                                                              s ->
+          Controller.kb(key, s)
+        end)
+
+      assert state.draft[token] == %Secret{value: "abc"}
+      refute inspect(exposed(state, deps)) =~ "abc"
+
+      # shown in clear: the native field's text, still a secret
+      revealed = Controller.kb(:reveal, state)
+      assert revealed.reveal?
+      assert revealed.edits == state.edits + 1
+      assert Controller.set({token, "abcd"}, revealed).draft[token] == %Secret{value: "abcd"}
+      # keys of a revealed secret go to the native field, not here
+      assert Controller.kb({:char, "z"}, revealed).draft[token] == %Secret{value: "abc"}
+
+      # cancel: no secret typed after all
+      refute Map.has_key?(Controller.kb(:cancel, state).draft, token)
+    end
+
+    test "layers, and nothing happens with the keyboard closed", %{state: state} do
+      editing = Controller.edit({"home_assistant", "url"}, state)
+      assert Controller.kb({:layer, :symbols}, editing).keyboard.layer == :symbols
+      assert Controller.kb(:shift, state) == state
+      # not a text field
+      assert Controller.edit({"home_assistant", "ssl_verify"}, state) == state
+    end
+  end
 end
