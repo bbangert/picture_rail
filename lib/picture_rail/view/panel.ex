@@ -1028,7 +1028,8 @@ defmodule PictureRail.View.Panel do
   end
 
   # From the `:ha` controller (it reads the model; the view doesn't)
-  defp name(ha, entity_id, form), do: Map.get(ha.names || %{}, {entity_id, form}, entity_id)
+  defp name(ha, entity_id, form),
+    do: Map.get(Map.get(ha, :names) || %{}, {entity_id, form}, entity_id)
 
   defp pill_fill(_color, _on?, false), do: Theme.color(:grey, 0.5)
   defp pill_fill(color, true, true), do: Theme.color(color)

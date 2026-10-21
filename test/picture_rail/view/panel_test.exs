@@ -111,6 +111,24 @@ defmodule PictureRail.View.PanelTest do
     assert Panel.paginate([], 500) == [[]]
   end
 
+  test "an entity's detail renders without anything from Home Assistant" do
+    # as the viewport has it while the :ha controller is down
+    ctx = %{
+      size: {1920, 1080},
+      portrait?: false,
+      panel: %{visible?: true, view: {:entity, "light.hall"}, page: 0, nav_page: 0, depth: 1},
+      ha: %{status: :unconfigured, slice: nil, states: %{}},
+      setup: nil,
+      settings: nil,
+      photos: nil,
+      network: nil,
+      pairing: nil,
+      sliders: %{}
+    }
+
+    assert Panel.render(ctx)
+  end
+
   test "with nothing from Home Assistant yet, the panel says why" do
     assert Panel.waiting_message(:connecting) == "Loading"
     assert Panel.waiting_message(:connected) == "Loading"
