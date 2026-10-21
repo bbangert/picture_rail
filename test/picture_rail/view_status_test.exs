@@ -9,12 +9,12 @@ defmodule PictureRail.View.StatusTest do
     photo_source_type: "immich"
   }
 
-  test "settings problems come first" do
-    assert Status.message(%{status: :template}, nil) == "Set up picture_rail.json"
+  test "settings problems come first, then pointing at Setup" do
     assert Status.message(%{status: {:error, ["x"]}}, nil) == "picture_rail.json has errors"
-
-    assert Status.message(%{status: :ok, configured: %{photo_source: false}}, nil) ==
-             "Photos aren't set up"
+    unset = %{status: :missing, configured: %{photo_source: false, home_assistant: false}}
+    assert Status.message(unset, nil, nil) == "Tap to set up Wi-Fi"
+    assert Status.message(unset, nil, %{status: :disconnected}) == "Tap to set up Wi-Fi"
+    assert Status.message(unset, nil, %{status: :connected}) == "Tap to set up photos"
   end
 
   test "then the photo source's status: common ones, then the source's own" do

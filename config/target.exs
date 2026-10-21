@@ -14,6 +14,9 @@ config :shoehorn, init: [:nerves_runtime, :nerves_pack]
 config :nerves_runtime, startup_guard_enabled: false
 config :picture_rail, firmware_guard: true
 
+# Wi-Fi setup on the frame drives VintageNet.
+config :picture_rail, network_backend: PictureRail.Network.VintageNet
+
 # Erlinit can be configured without a rootfs_overlay. See
 # https://github.com/nerves-project/erlinit/ for more information on
 # configuring erlinit.

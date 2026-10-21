@@ -35,7 +35,15 @@ defmodule PictureRail.App.SetupTest do
         Keyword.get(opts, :save, fn values ->
           send(test, {:save, values})
           :ok
-        end)
+        end),
+      join: fn ssid, password, hidden? ->
+        send(test, {:join, ssid, password, hidden?})
+        Keyword.get(opts, :join, :ok)
+      end,
+      wifi_watch: fn ->
+        send(test, :wifi_watch)
+        :ok
+      end
     }
   end
 
@@ -259,6 +267,60 @@ defmodule PictureRail.App.SetupTest do
       assert Controller.kb(:shift, state) == state
       # not a text field
       assert Controller.edit({"home_assistant", "ssl_verify"}, state) == state
+    end
+  end
+
+  describe "Wi-Fi" do
+    @network %{status: :disconnected, trial: nil, networks: [], ssid: nil, ip: nil}
+
+    test "opening it watches for networks; picking one and joining", %{} do
+      deps = Map.put(deps(%{}), :network, @network)
+      state = open(:wifi, deps, callbacks())
+      assert_received :wifi_watch
+      # not connected yet: the panel stays up
+      assert exposed(state, deps).busy?
+
+      state = Controller.wifi_pick(%{ssid: "Home", security: :wpa2}, state, deps, callbacks())
+      password = {"wifi", "password"}
+
+      missing = Controller.join(nil, state, deps, callbacks())
+      assert missing.errors == %{password => "is required"}
+
+      state = state |> then(&Controller.edit(password, &1))
+
+      state =
+        Enum.reduce(String.graphemes("goodpass"), state, &Controller.kb({:char, &1}, &2))
+        |> then(&Controller.kb(:done, &1))
+
+      state = Controller.join(nil, state, deps, callbacks())
+      assert exposed(state, deps).joining?
+      state = settle(state)
+      assert_received {:join, "Home", "goodpass", false}
+      # the typed password is gone once the trial is under way
+      assert state.draft == %{{"wifi", "mode"} => :list}
+
+      connected = %{@network | status: :connected, ssid: "Home"}
+      refute exposed(state, %{deps | network: connected}).busy?
+    end
+
+    test "a refused join says why", %{} do
+      deps = Map.put(deps(%{}), :network, @network)
+      cbs = callbacks(join: {:error, "The password needs at least 8 characters"})
+      state = open(:wifi, deps, cbs)
+      state = Controller.wifi_pick(%{ssid: "Cafe", security: :open}, state, deps, cbs)
+      state = Controller.join(nil, state, deps, cbs) |> settle()
+      assert state.message == {:error, "The password needs at least 8 characters"}
+    end
+
+    test "other network, and back to the list", %{} do
+      deps = Map.put(deps(%{}), :network, @network)
+      state = open(:wifi, deps, callbacks())
+      other = Controller.wifi_other(nil, state)
+      assert other.draft[{"wifi", "hidden"}] == true
+
+      assert Controller.wifi_list(nil, other, deps, callbacks()).draft == %{
+               {"wifi", "mode"} => :list
+             }
     end
   end
 end

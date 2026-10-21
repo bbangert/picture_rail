@@ -119,8 +119,10 @@ defmodule PictureRail.PhotoSource do
   def active(registry \\ @registry) do
     # The registry starts with `PictureRail.PhotoSource.Supervisor`, after
     # the app whose controllers ask.
+    # (the registry forgets a stopped source a moment after it stops)
     with pid when is_pid(pid) <- Process.whereis(registry),
-         [{pid, module}] <- Registry.lookup(registry, :active) do
+         [{pid, module}] <- Registry.lookup(registry, :active),
+         true <- Process.alive?(pid) do
       {pid, module}
     else
       _ -> nil

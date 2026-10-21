@@ -26,6 +26,15 @@ defmodule PictureRail.App.Setup do
       the value from before), and every key of a masked secret
     * `:reveal` - show the secret being typed in clear (a native field),
       or mask it again
+    * `:wifi_pick` - a listed network (`PictureRail.Network.networks/1`)
+      to join; `:wifi_other` - one typed in by hand; `:wifi_list` - back to
+      the list
+    * `:join` - join the Wi-Fi draft's network (the `:join` callback,
+      `PictureRail.Network.join/3`); how it goes is the `:network`
+      controller's
+
+  Opening Wi-Fi asks for scans while it's open (the `:wifi_watch`
+  callback).
 
   While the keyboard is open, `:set` from the native field is cut to the
   field's `PictureRail.Setup.Field.max_length/1` (the field re-renders
@@ -37,7 +46,7 @@ defmodule PictureRail.App.Setup do
   tasks (the `:stored` callback), never this state.
 
   Exposes `%{section:, draft:, errors:, message:, choices:, check:,
-  saving?:, busy?:, editing:, keyboard:, reveal?:, edits:}`: `editing` the
+  saving?:, joining?:, busy?:, editing:, keyboard:, reveal?:, edits:}`: `editing` the
   id the keyboard is open on, `keyboard` its layer and shift, `edits`
   counts keyboard openings (the field is keyed on it, so it mounts
   focused); `errors` by field id, `message` `{:ok | :error,
@@ -61,7 +70,11 @@ defmodule PictureRail.App.Setup do
       :close,
       :edit,
       :kb,
-      :reveal
+      :reveal,
+      :wifi_pick,
+      :wifi_other,
+      :wifi_list,
+      :join
     ]
 
   require Logger
@@ -93,10 +106,48 @@ defmodule PictureRail.App.Setup do
   def open(section, _state, deps, callbacks) do
     state = editor(section, Setup.draft(section, public(deps)))
 
-    if section == :photo_source and configured?(deps, :photo_source),
-      do: load_all_choices(state, callbacks),
-      else: state
+    cond do
+      section == :photo_source and configured?(deps, :photo_source) ->
+        load_all_choices(state, callbacks)
+
+      section == :wifi ->
+        callbacks.wifi_watch.()
+        state
+
+      true ->
+        state
+    end
   end
+
+  def wifi_pick(network, %{section: :wifi}, _deps, callbacks) do
+    callbacks.wifi_watch.()
+    editor(:wifi, Setup.wifi_draft(network))
+  end
+
+  def wifi_pick(_network, state, _deps, _callbacks), do: state
+
+  def wifi_other(_payload, %{section: :wifi}), do: editor(:wifi, Setup.wifi_draft(nil))
+  def wifi_other(_payload, state), do: state
+
+  def wifi_list(_payload, %{section: :wifi}, _deps, callbacks) do
+    callbacks.wifi_watch.()
+    editor(:wifi, Setup.draft(:wifi, %{}))
+  end
+
+  def wifi_list(_payload, state, _deps, _callbacks), do: state
+
+  def join(_payload, %{section: :wifi} = state, _deps, callbacks) do
+    case Setup.wifi_join(state.draft) do
+      {:ok, {ssid, password, hidden?}} ->
+        fun = fn -> callbacks.join.(ssid, password, hidden?) end
+        %{run(state, :join, fun, callbacks) | errors: %{}, message: nil}
+
+      {:error, errors} ->
+        %{state | errors: errors, message: {:error, "Check the fields marked"}}
+    end
+  end
+
+  def join(_payload, state, _deps, _callbacks), do: state
 
   defp editor(section, draft), do: %{closed() | section: section, draft: draft}
 
@@ -358,6 +409,13 @@ defmodule PictureRail.App.Setup do
     %{state | errors: errors, message: {:error, message}}
   end
 
+  # The network is on trial: the `:network` controller tells how it goes.
+  # The typed password isn't needed any more.
+  defp done(:join, :ok, state), do: %{state | draft: Setup.draft(:wifi, %{})}
+
+  defp done(:join, {:error, message}, state),
+    do: %{state | message: {:error, to_string(message)}}
+
   defp done(:save, {:error, message}, state),
     do: %{state | message: {:error, to_string(message)}}
 
@@ -371,11 +429,17 @@ defmodule PictureRail.App.Setup do
 
   defp configured?(_deps, _key), do: false
 
+  # Joining, or not connected yet: Wi-Fi setup stays up.
+  defp wifi_busy?(%{section: :wifi}, %{network: network}),
+    do: network.trial != nil or network.status != :connected
+
+  defp wifi_busy?(_state, _deps), do: false
+
   @impl Solve.Controller
   def expose(state, deps, _params) do
     busy? =
       state.section != nil and
-        (state.editing != nil or state.pending != %{} or
+        (state.editing != nil or state.pending != %{} or wifi_busy?(state, deps) or
            state.draft != Setup.draft(state.section, public(deps)))
 
     %{
@@ -386,6 +450,7 @@ defmodule PictureRail.App.Setup do
       choices: state.choices,
       check: state.check,
       saving?: :save in Map.values(state.pending),
+      joining?: :join in Map.values(state.pending),
       busy?: busy?,
       editing: state.editing,
       keyboard: state.keyboard,

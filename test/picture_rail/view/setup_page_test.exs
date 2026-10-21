@@ -94,4 +94,32 @@ defmodule PictureRail.View.SetupPageTest do
     assert SetupPage.seconds(500) == "0.5 s"
     assert SetupPage.seconds(0) == "0 s"
   end
+
+  test "Wi-Fi: the overview line, the status and each network's line" do
+    connected = %{status: :connected, ssid: "Home", ip: "192.168.1.40", trial: nil, result: nil}
+    assert SetupPage.section_summary(:wifi, nil, nil, connected) == "Home · 192.168.1.40"
+    assert SetupPage.section_summary(:wifi, nil, nil, %{status: :disconnected}) == "Not connected"
+
+    assert SetupPage.wifi_status(connected) == {"Connected to Home · 192.168.1.40", :sky}
+
+    assert {"Connecting to Cafe...", _} =
+             SetupPage.wifi_status(%{connected | trial: %{ssid: "Cafe"}})
+
+    assert SetupPage.wifi_status(%{connected | result: {:failed, :wrong_password, "Cafe"}}) ==
+             {"Wrong password for Cafe, back on Home", :red}
+
+    assert {"Couldn't connect to Far", :red} =
+             SetupPage.wifi_status(%{
+               status: :disconnected,
+               ssid: nil,
+               trial: nil,
+               result: {:failed, :timeout, "Far"}
+             })
+
+    assert SetupPage.wifi_status(%{status: :disconnected, trial: nil, result: nil}) ==
+             {"Not connected", :peach}
+
+    assert SetupPage.network_line(%{security: :wpa2, signal: 72}) == "WPA2 · 72%"
+    assert SetupPage.network_line(%{security: :wpa3_only, signal: 5}) =~ "may not work"
+  end
 end

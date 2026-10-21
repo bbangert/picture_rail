@@ -6,6 +6,10 @@ defmodule PictureRail.Setup do
 
   A section shows fields of one or more sections of the settings file:
 
+    * `:wifi` - not in the settings file: the network to join
+      (`PictureRail.Network`), with a `"mode"` of `:list` (picking from the
+      scan), `:picked` (a listed network: its password) or `:other` (a
+      hidden one: name, security, password)
     * `:photo_source` - the photo source's own fields (`"photo_source"`)
     * `:home_assistant` - `"home_assistant"`
     * `:display` - "Slideshow & panel": `"slideshow"`, `"cache"`,
@@ -21,7 +25,7 @@ defmodule PictureRail.Setup do
   alias PictureRail.Settings.Sections
   alias PictureRail.Setup.{Field, Secret}
 
-  @type section :: :photo_source | :home_assistant | :display
+  @type section :: :wifi | :photo_source | :home_assistant | :display
   @type id :: {String.t(), String.t()}
   @type draft :: %{id() => term()}
 
@@ -29,10 +33,11 @@ defmodule PictureRail.Setup do
 
   @doc "The sections, in the order the Setup page lists them."
   @spec sections() :: [section()]
-  def sections, do: [:photo_source, :home_assistant, :display]
+  def sections, do: [:wifi, :photo_source, :home_assistant, :display]
 
   @doc "A section's title."
   @spec label(section()) :: String.t()
+  def label(:wifi), do: "Wi-Fi"
   def label(:photo_source), do: "Photos"
   def label(:home_assistant), do: "Home Assistant"
   def label(:display), do: "Slideshow & panel"
@@ -46,6 +51,29 @@ defmodule PictureRail.Setup do
   belongs to. For `:photo_source`, those of the draft's source type.
   """
   @spec fields(section(), draft()) :: [{String.t(), Field.t()}]
+  def fields(:wifi, draft) do
+    ssid = %Field{key: "ssid", label: "Network name", type: :text, required?: true, max: 32}
+
+    secured = %Field{key: "secured", label: "Password protected", type: :toggle, default: true}
+
+    password = %Field{
+      key: "password",
+      label: "Password",
+      type: :secret,
+      max: 63,
+      help: "WPA2: 8 to 63 characters"
+    }
+
+    fields =
+      case draft[wifi_id("mode")] do
+        :other -> [ssid, secured] ++ if(draft[wifi_id("secured")], do: [password], else: [])
+        :picked -> if draft[wifi_id("secured")], do: [password], else: []
+        _list -> []
+      end
+
+    for f <- fields, do: {"wifi", f}
+  end
+
   def fields(:photo_source, draft) do
     case source(draft) do
       nil -> []
@@ -61,9 +89,68 @@ defmodule PictureRail.Setup do
 
   @doc "The file sections a section saves."
   @spec file_sections(section()) :: [String.t()]
+  def file_sections(:wifi), do: []
   def file_sections(:photo_source), do: ["photo_source"]
   def file_sections(:home_assistant), do: ["home_assistant"]
   def file_sections(:display), do: @display
+
+  @doc ~s{The id of a Wi-Fi draft value: `"mode"`, `"ssid"`, ...}
+  @spec wifi_id(String.t()) :: id()
+  def wifi_id(key), do: {"wifi", key}
+
+  @doc """
+  A Wi-Fi draft for joining a listed network (`PictureRail.Network.networks/1`)
+  or, with `nil`, one typed in by hand.
+  """
+  @spec wifi_draft(map() | nil) :: draft()
+  def wifi_draft(%{ssid: ssid, security: security}) do
+    %{
+      wifi_id("mode") => :picked,
+      wifi_id("ssid") => ssid,
+      wifi_id("secured") => security != :open,
+      wifi_id("hidden") => false
+    }
+  end
+
+  def wifi_draft(nil) do
+    %{
+      wifi_id("mode") => :other,
+      wifi_id("ssid") => "",
+      wifi_id("secured") => true,
+      wifi_id("hidden") => true
+    }
+  end
+
+  @doc """
+  What to join from a Wi-Fi draft: `{:ok, {ssid, password | nil, hidden?}}`,
+  or errors by field id.
+  """
+  @spec wifi_join(draft()) :: {:ok, {String.t(), String.t() | nil, boolean()}} | {:error, map()}
+  def wifi_join(draft) do
+    ssid = String.trim(draft[wifi_id("ssid")] || "")
+
+    password =
+      case draft[wifi_id("password")] do
+        %Secret{value: value} -> value
+        _ -> ""
+      end
+
+    secured? = draft[wifi_id("secured")] == true
+
+    errors =
+      %{}
+      |> then(&if(ssid == "", do: Map.put(&1, wifi_id("ssid"), "is required"), else: &1))
+      |> then(
+        &if(secured? and password == "",
+          do: Map.put(&1, wifi_id("password"), "is required"),
+          else: &1
+        )
+      )
+
+    if errors == %{},
+      do: {:ok, {ssid, if(secured?, do: password), draft[wifi_id("hidden")] == true}},
+      else: {:error, errors}
+  end
 
   @doc "The photo source module a draft is for (`nil` if its type is unknown)."
   @spec source(draft()) :: module() | nil
@@ -79,6 +166,8 @@ defmodule PictureRail.Setup do
   (`PictureRail.Settings.public/1`): what's saved, or the defaults.
   """
   @spec draft(section(), map()) :: draft()
+  def draft(:wifi, _public), do: %{wifi_id("mode") => :list}
+
   def draft(:photo_source, public) do
     stored = public.photo_source || %{}
     type = Map.get(stored, "type") || hd(PhotoSource.types())
@@ -119,6 +208,8 @@ defmodule PictureRail.Setup do
     stored = public.photo_source || %{}
     stored["type"] == draft[type_id()] and stored[key <> "_set?"] == true
   end
+
+  def secret_set?({"wifi", _key}, _draft, _public), do: false
 
   def secret_set?({name, key}, _draft, public),
     do: stored(public, name)[key <> "_set?"] == true

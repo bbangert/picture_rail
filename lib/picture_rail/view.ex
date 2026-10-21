@@ -34,7 +34,7 @@ defmodule PictureRail.View do
 
   require Logger
 
-  alias PictureRail.App
+  alias PictureRail.{App, Network}
   alias PictureRail.View.{Config, Panel, SetupPage, Status}
 
   @slider_send_ms 250
@@ -68,6 +68,8 @@ defmodule PictureRail.View do
     :exit, _ -> nil
   end
 
+  @first_boot_ms 3_000
+
   @impl Viewport
   def mount(opts) do
     config = Config.build()
@@ -90,6 +92,8 @@ defmodule PictureRail.View do
       slider_timers: %{}
     }
 
+    # a frame with nothing set up opens Wi-Fi setup by itself
+    Process.send_after(self(), :first_boot, @first_boot_ms)
     {:ok, state, config}
   end
 
@@ -207,7 +211,7 @@ defmodule PictureRail.View do
 
   # Nothing to show yet: a small status readout in the corner.
   defp status_block do
-    message = Status.message(solve(App, :settings), solve(App, :photos))
+    message = Status.message(solve(App, :settings), solve(App, :photos), solve(App, :network))
 
     el(
       [align_bottom(), align_left(), padding(48)],
@@ -245,6 +249,7 @@ defmodule PictureRail.View do
       setup: solve(App, :setup),
       settings: solve(App, :settings),
       photos: solve(App, :photos),
+      network: solve(App, :network),
       sliders: state.sliders
     }
 
@@ -444,6 +449,24 @@ defmodule PictureRail.View do
     {value, sliders} = Map.pop(state.sliders, key)
     if value, do: send_event(:ha, :call, slider_request(entity_id, kind, value))
     {:noreply, %{state | sliders: sliders, slider_timers: Map.delete(state.slider_timers, key)}}
+  end
+
+  def handle_info(:first_boot, state) do
+    backend = Network.Backend.impl()
+
+    with %{configured: configured} <- solve(App, :settings),
+         true <-
+           Network.first_boot?(
+             backend.configured_networks?(),
+             backend.ethernet_up?(),
+             configured
+           ) do
+      Logger.info("View: nothing set up; opening Wi-Fi setup")
+      send_event(:setup, :open, :wifi)
+      send_event(:panel, :goto, {:setup, :wifi})
+    end
+
+    {:noreply, state}
   end
 
   def handle_info({:spike_tap, name}, state) do

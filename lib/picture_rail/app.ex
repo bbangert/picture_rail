@@ -10,6 +10,7 @@ defmodule PictureRail.App do
   | `:photos` | the photo source's status and counts |
   | `:slideshow` | the photo on screen and the one fading out |
   | `:setup` | the Setup page's editor |
+  | `:network` | Wi-Fi status, networks around, a join on trial |
   | `:ha` | Home Assistant status and the panel view's slice of the model |
 
   Outside processes (the settings watcher, the orientation sensor, the
@@ -25,14 +26,17 @@ defmodule PictureRail.App do
     [
       controller!(name: :settings, module: PictureRail.App.Settings),
       controller!(name: :orientation, module: PictureRail.App.Orientation),
+      controller!(name: :network, module: PictureRail.App.Network),
       controller!(
         name: :setup,
         module: PictureRail.App.Setup,
-        dependencies: [:settings],
+        dependencies: [:settings, :network],
         callbacks: %{
           run: &run_task/1,
           stored: &stored/1,
-          save: &Watcher.update/1
+          save: &Watcher.update/1,
+          join: &PictureRail.Network.join/3,
+          wifi_watch: &wifi_watch/0
         }
       ),
       controller!(
@@ -73,6 +77,11 @@ defmodule PictureRail.App do
   # Setup's slow work (talking to a photo source, saving); the `:setup`
   # controller gets the task's reply.
   defp run_task(fun), do: Task.Supervisor.async_nolink(PictureRail.TaskSup, fun)
+
+  defp wifi_watch do
+    if Process.whereis(PictureRail.Network), do: PictureRail.Network.watch()
+    :ok
+  end
 
   # A saved section with its credentials, read inside those tasks only.
   defp stored(name), do: PictureRail.Settings.values(PictureRail.Settings.current(), name)

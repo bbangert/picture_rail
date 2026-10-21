@@ -3,6 +3,8 @@ defmodule PictureRail.Application do
 
   use Application
 
+  alias PictureRail.Network
+
   @impl true
   def start(_type, _args) do
     children =
@@ -11,11 +13,25 @@ defmodule PictureRail.Application do
           {Task.Supervisor, name: PictureRail.TaskSup},
           PictureRail.Settings.Watcher,
           {PictureRail.App, name: PictureRail.App},
-          PictureRail.PhotoSource.Supervisor,
+          PictureRail.PhotoSource.Supervisor
+        ] ++
+        network() ++
+        [
           PictureRail.HA.Supervisor
         ] ++ view() ++ firmware_guard()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: PictureRail.Supervisor)
+  end
+
+  # Wi-Fi (`PictureRail.Network`), and the stand-in backend on the host.
+  # Tests start their own.
+  defp network do
+    if Application.get_env(:picture_rail, :start_network, true) do
+      fake = if Network.Backend.impl() == Network.Fake, do: [Network.Fake], else: []
+      fake ++ [Network]
+    else
+      []
+    end
   end
 
   # Started last, once the state it renders exists, under its own restart

@@ -122,4 +122,43 @@ defmodule PictureRail.SetupTest do
   test "secrets in a draft don't show in inspect" do
     refute inspect(%{x: %Secret{value: "hunter2"}}) =~ "hunter2"
   end
+
+  describe "Wi-Fi" do
+    test "a listed network asks for a password only when it has one" do
+      secured = Setup.wifi_draft(%{ssid: "Home", security: :wpa2})
+      assert [{"wifi", %{key: "password", type: :secret}}] = Setup.fields(:wifi, secured)
+      assert Setup.fields(:wifi, Setup.wifi_draft(%{ssid: "Cafe", security: :open})) == []
+      assert Setup.fields(:wifi, Setup.draft(:wifi, %{})) == []
+
+      other = Setup.wifi_draft(nil)
+
+      assert ["ssid", "secured", "password"] =
+               Enum.map(Setup.fields(:wifi, other), &elem(&1, 1).key)
+
+      open = Map.put(other, Setup.wifi_id("secured"), false)
+      assert ["ssid", "secured"] = Enum.map(Setup.fields(:wifi, open), &elem(&1, 1).key)
+    end
+
+    test "what to join, or what's missing" do
+      draft = Setup.wifi_draft(%{ssid: "Home", security: :wpa2})
+
+      assert Setup.wifi_join(draft) == {:error, %{{"wifi", "password"} => "is required"}}
+
+      typed = Map.put(draft, Setup.wifi_id("password"), %Secret{value: "goodpassword"})
+      assert Setup.wifi_join(typed) == {:ok, {"Home", "goodpassword", false}}
+
+      assert Setup.wifi_join(Setup.wifi_draft(%{ssid: "Cafe", security: :open})) ==
+               {:ok, {"Cafe", nil, false}}
+
+      hidden =
+        Setup.wifi_draft(nil)
+        |> Map.put(Setup.wifi_id("ssid"), "  Secret ")
+        |> Map.put(Setup.wifi_id("secured"), false)
+
+      assert Setup.wifi_join(hidden) == {:ok, {"Secret", nil, true}}
+
+      assert {:error, %{{"wifi", "ssid"} => "is required"}} =
+               Setup.wifi_join(Setup.wifi_draft(nil))
+    end
+  end
 end

@@ -5,17 +5,23 @@ defmodule PictureRail.View.Status do
 
   alias PictureRail.PhotoSource
 
-  @doc "A short status line from the `:settings` and `:photos` controllers."
-  @spec message(map() | nil, map() | nil) :: String.t()
-  def message(settings, photos)
+  @doc """
+  A short status line from the `:settings`, `:photos` and `:network`
+  controllers. With no photo source yet it points at the Setup page: Wi-Fi
+  first if there's no network.
+  """
+  @spec message(map() | nil, map() | nil, map() | nil) :: String.t()
+  def message(settings, photos, network \\ nil)
 
-  def message(%{status: status}, _immich) when status in [:missing, :template],
-    do: "Set up picture_rail.json"
+  def message(%{status: {:error, _}}, _photos, _network), do: "picture_rail.json has errors"
 
-  def message(%{status: {:error, _}}, _immich), do: "picture_rail.json has errors"
-  def message(%{configured: %{photo_source: false}}, _immich), do: "Photos aren't set up"
+  def message(%{configured: %{photo_source: true}} = settings, photos, _network),
+    do: photo_message(settings, photos)
 
-  def message(settings, %{status: status} = photos) do
+  def message(_settings, _photos, %{status: :connected}), do: "Tap to set up photos"
+  def message(_settings, _photos, _network), do: "Tap to set up Wi-Fi"
+
+  defp photo_message(settings, %{status: status} = photos) do
     source = source(settings)
 
     case status do
@@ -26,7 +32,7 @@ defmodule PictureRail.View.Status do
     end
   end
 
-  def message(_settings, _photos), do: "Loading photos"
+  defp photo_message(_settings, _photos), do: "Loading photos"
 
   defp source(%{photo_source_type: type}) when is_binary(type) do
     case PhotoSource.module_for(type) do

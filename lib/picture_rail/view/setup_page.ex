@@ -16,7 +16,7 @@ defmodule PictureRail.View.SetupPage do
   alias PictureRail.Setup.{Field, Secret}
   alias PictureRail.View.{Keyboard, LCARS, Theme}
 
-  @colors %{photo_source: :sky, home_assistant: :lilac, display: :peach}
+  @colors %{wifi: :bluey, photo_source: :sky, home_assistant: :lilac, display: :peach}
   @row_h 84
   @error_h 30
   @choice_h 72
@@ -27,10 +27,15 @@ defmodule PictureRail.View.SetupPage do
   The overview line for a section: what it's set to, or "Not set up".
   `settings` is the `:settings` controller's exposed map.
   """
-  @spec section_summary(Setup.section(), map() | nil, map() | nil) :: String.t()
-  def section_summary(section, settings, photos \\ nil)
+  @spec section_summary(Setup.section(), map() | nil, map() | nil, map() | nil) :: String.t()
+  def section_summary(section, settings, photos \\ nil, network \\ nil)
 
-  def section_summary(:photo_source, %{settings: %{photo_source: %{} = source}}, photos) do
+  def section_summary(:wifi, _settings, _photos, %{status: :connected} = network),
+    do: Enum.join(Enum.reject([network.ssid, network.ip], &is_nil/1), " · ")
+
+  def section_summary(:wifi, _settings, _photos, _network), do: "Not connected"
+
+  def section_summary(:photo_source, %{settings: %{photo_source: %{} = source}}, photos, _) do
     label =
       case PhotoSource.module_for(source["type"] || "") do
         {:ok, module} -> module.label()
@@ -46,13 +51,13 @@ defmodule PictureRail.View.SetupPage do
     Enum.join([label, albums] ++ photo_count(photos), " · ")
   end
 
-  def section_summary(:home_assistant, %{settings: %{home_assistant: %{"url" => url}}}, _photos),
+  def section_summary(:home_assistant, %{settings: %{home_assistant: %{"url" => url}}}, _, _),
     do: URI.parse(url).host || url
 
-  def section_summary(:display, %{settings: %{slideshow: slideshow}}, _photos),
+  def section_summary(:display, %{settings: %{slideshow: slideshow}}, _photos, _network),
     do: "Every #{seconds(slideshow.interval_ms)} · fade #{seconds(slideshow.fade_ms)}"
 
-  def section_summary(_section, _settings, _photos), do: "Not set up"
+  def section_summary(_section, _settings, _photos, _network), do: "Not set up"
 
   defp photo_count(%{status: :online, photos: n}) when n > 0, do: ["#{n} photos"]
   defp photo_count(%{status: :offline}), do: ["offline"]
@@ -128,7 +133,7 @@ defmodule PictureRail.View.SetupPage do
         pill =
           LCARS.pill(
             label: String.upcase(Setup.label(section)),
-            sub: section_summary(section, ctx.settings, ctx.photos),
+            sub: section_summary(section, ctx.settings, ctx.photos, Map.get(ctx, :network)),
             color: Theme.hex(@colors[section]),
             height: 96,
             attrs: [Event.on_press({:setup_open, section})]
@@ -143,17 +148,175 @@ defmodule PictureRail.View.SetupPage do
   def blocks(ctx, {:setup, section}) do
     setup = ctx.setup
 
-    if setup == nil or setup.section != section do
-      # the editor opens with the view; until its state arrives
-      [{:block, 80, message_element("Loading", :peach)}]
-    else
-      public = ctx.settings.settings
-      color = Theme.hex(@colors[section])
+    cond do
+      setup == nil or setup.section != section ->
+        # the editor opens with the view; until its state arrives
+        [{:block, 80, message_element("Loading", :peach)}]
 
-      source_picker(ctx, setup, color) ++
-        Enum.flat_map(field_rows(setup, public, ctx.photos), &field_blocks(ctx, &1, color)) ++
-        footer(ctx, setup)
+      section == :wifi ->
+        wifi_blocks(ctx, setup, Map.get(ctx, :network) || %{})
+
+      true ->
+        section_blocks(ctx, setup, section)
     end
+  end
+
+  defp section_blocks(ctx, setup, section) do
+    public = ctx.settings.settings
+    color = Theme.hex(@colors[section])
+
+    source_picker(ctx, setup, color) ++
+      Enum.flat_map(field_rows(setup, public, ctx.photos), &field_blocks(ctx, &1, color)) ++
+      footer(ctx, setup)
+  end
+
+  # -- Wi-Fi --
+
+  @doc """
+  What the Wi-Fi page says about the network: connected, a join on
+  trial, or how the last one went. `network` is the `:network`
+  controller's exposed map.
+  """
+  @spec wifi_status(map()) :: {String.t(), atom()}
+  def wifi_status(%{trial: %{ssid: ssid}}), do: {"Connecting to #{ssid}...", :gold}
+
+  def wifi_status(%{result: {:failed, reason, ssid}} = network) do
+    back = if network[:status] == :connected, do: ", back on #{network.ssid}", else: ""
+
+    case reason do
+      :wrong_password -> {"Wrong password for #{ssid}#{back}", :red}
+      :timeout -> {"Couldn't connect to #{ssid}#{back}", :red}
+    end
+  end
+
+  def wifi_status(%{status: :connected, ssid: ssid, ip: ip}),
+    do: {"Connected to #{ssid} · #{ip}", :sky}
+
+  def wifi_status(_network), do: {"Not connected", :peach}
+
+  @doc "A listed network's second line: its security and signal."
+  @spec network_line(map()) :: String.t()
+  def network_line(%{security: security, signal: signal}) do
+    kind =
+      case security do
+        :open -> "Open"
+        :wpa2 -> "WPA2"
+        :wpa3_only -> "WPA3 only, may not work"
+        :eap -> "Enterprise, not supported"
+        :wep -> "WEP, not supported"
+      end
+
+    "#{kind} · #{signal}%"
+  end
+
+  defp wifi_blocks(ctx, setup, network) do
+    color = Theme.hex(@colors[:wifi])
+    {status, status_color} = wifi_status(network)
+    status_block = {:block, 60, message_element(status, status_color)}
+    next = next_step(ctx, network)
+
+    case setup.draft[Setup.wifi_id("mode")] do
+      :list ->
+        [status_block | next] ++ network_list(ctx, network, color)
+
+      _mode ->
+        public = ctx.settings.settings
+        ssid = setup.draft[Setup.wifi_id("ssid")]
+        heading = {:heading, color, if(ssid in [nil, ""], do: "Other network", else: ssid)}
+
+        [status_block, heading] ++
+          Enum.flat_map(field_rows(setup, public, nil), &field_blocks(ctx, &1, color)) ++
+          join_footer(setup, network)
+    end
+  end
+
+  # Once connected with nothing else set up: on to the photos.
+  defp next_step(ctx, %{status: :connected, trial: nil}) do
+    if match?(%{configured: %{photo_source: false}}, ctx.settings) do
+      [
+        {:row, 72,
+         [
+           LCARS.pill(
+             label: "NEXT: PHOTOS",
+             color: Theme.hex(:orange),
+             height: 72,
+             width: px(260),
+             attrs: [Event.on_press({:setup_open, :photo_source})]
+           )
+         ], nil}
+      ]
+    else
+      []
+    end
+  end
+
+  defp next_step(_ctx, _network), do: []
+
+  defp network_list(ctx, network, color) do
+    heading =
+      {:heading, color, if(network[:scanning?], do: "Networks (scanning)", else: "Networks")}
+
+    joining? = network[:trial] != nil
+
+    pills =
+      for n <- network[:networks] || [] do
+        usable? = n.security in [:open, :wpa2, :wpa3_only] and not joining?
+
+        LCARS.pill(
+          label: LCARS.fit(n.ssid, 28),
+          sub: network_line(n),
+          fill: choice_fill(color, usable?),
+          height: 96,
+          attrs: if(usable?, do: [Event.on_press({:setup, :wifi_pick, n})], else: [])
+        )
+      end
+
+    other =
+      LCARS.pill(
+        label: "OTHER NETWORK...",
+        sub: "A hidden one",
+        color: Theme.hex(:lilac),
+        height: 96,
+        attrs: if(joining?, do: [], else: [Event.on_press({:setup, :wifi_other, nil})])
+      )
+
+    rows =
+      (pills ++ [other])
+      |> Enum.chunk_every(Kernel.max(ctx.cols - 2, 1))
+      |> Enum.map(&{:row, 96, &1, heading})
+
+    [heading | rows]
+  end
+
+  defp join_footer(setup, network) do
+    heading = {:heading, Theme.hex(:orange), "Join"}
+    busy? = setup.joining? or network[:trial] != nil
+
+    join =
+      LCARS.pill(
+        label: if(network[:trial], do: "JOINING", else: "JOIN"),
+        fill: Theme.color(if(busy?, do: Theme.dim(Theme.hex(:orange)), else: Theme.hex(:orange))),
+        height: 72,
+        width: px(180),
+        attrs: if(busy?, do: [], else: [Event.on_press({:setup, :join, nil})])
+      )
+
+    back =
+      LCARS.pill(
+        label: "NETWORKS",
+        color: Theme.hex(:mauve),
+        height: 72,
+        width: px(200),
+        attrs: [Event.on_press({:setup, :wifi_list, nil})]
+      )
+
+    message =
+      case setup.message do
+        {:error, text} -> [{:block, 50, message_element(text, :red)}]
+        _ -> []
+      end
+
+    [heading, {:row, 72, [join, back], heading}] ++ message
   end
 
   # A row of the known sources, when there's more than one to choose from.
