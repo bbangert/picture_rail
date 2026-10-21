@@ -36,6 +36,7 @@ defmodule PictureRail.View do
 
   alias PictureRail.{App, Network}
   alias PictureRail.View.{Config, Panel, SetupPage, Status}
+  alias PictureRail.Web.Pairing
 
   @slider_send_ms 250
   # how far a held finger may drift and still count as a long press
@@ -250,6 +251,7 @@ defmodule PictureRail.View do
       settings: solve(App, :settings),
       photos: solve(App, :photos),
       network: solve(App, :network),
+      pairing: solve(App, :pairing),
       sliders: state.sliders
     }
 
@@ -393,6 +395,13 @@ defmodule PictureRail.View do
 
   def handle_info(message, state) when message in [:back, :hide] do
     send_event(:panel, message, nil)
+    {:noreply, state}
+  end
+
+  # The Setup page's "Forget devices": every web page session ends.
+  def handle_info(:forget_paired, state) do
+    send_event(:panel, :activity, nil)
+    if Process.whereis(Pairing), do: Pairing.forget()
     {:noreply, state}
   end
 

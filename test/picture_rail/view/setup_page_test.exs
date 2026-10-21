@@ -122,4 +122,40 @@ defmodule PictureRail.View.SetupPageTest do
     assert SetupPage.network_line(%{security: :wpa2, signal: 72}) == "WPA2 · 72%"
     assert SetupPage.network_line(%{security: :wpa3_only, signal: 5}) =~ "may not work"
   end
+
+  test "the overview offers the web page while connected: beside the pills, or under them" do
+    assert SetupPage.code("012345") == "012 345"
+
+    connected = %{status: :connected, ip: "192.168.1.40", ssid: "Home"}
+
+    ctx =
+      Map.merge(exposed(@immich), %{
+        photos: nil,
+        network: connected,
+        pairing: %{code: "012345"},
+        portrait?: false,
+        content_w: 1574,
+        content_h: 782
+      })
+
+    # landscape: one block, on the first page
+    assert [{:block, h, _}] = SetupPage.blocks(ctx, :setup)
+    assert h <= ctx.content_h
+
+    # portrait: the pills, then the phone's section
+    portrait = %{ctx | portrait?: true, content_w: 1048, content_h: 1100}
+    blocks = SetupPage.blocks(portrait, :setup)
+    assert [{:heading, _, "Settings"} | _] = blocks
+    assert Enum.count(blocks, &match?({:row, _, [_], _}, &1)) == 4
+    assert Enum.any?(blocks, &match?({:heading, _, "Settings on your phone"}, &1))
+
+    # not connected, or no code yet: only the pills
+    for ctx <- [
+          %{ctx | network: %{connected | status: :disconnected}},
+          %{ctx | pairing: %{code: nil}}
+        ] do
+      assert [{:heading, _, "Settings"} | rows] = SetupPage.blocks(ctx, :setup)
+      assert length(rows) == 4
+    end
+  end
 end

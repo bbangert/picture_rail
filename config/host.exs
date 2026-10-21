@@ -34,6 +34,7 @@ if config_env() == :test do
   config :picture_rail,
     start_view: false,
     start_network: false,
+    start_web: false,
     data_dir: Path.expand("../tmp/test-data", __DIR__)
 
   # Immich.Source's "Test" and album list talk to a Req.Test stub.

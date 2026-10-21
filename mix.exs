@@ -61,7 +61,15 @@ defmodule PictureRail.MixProject do
       {:req, "~> 0.7.5"},
       {:jason, "~> 1.4"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:plug, "~> 1.16", only: :test},
+
+      # The settings web page (paired from the frame's Setup page)
+      {:plug, "~> 1.18"},
+      # 1.12.5's advisories (EEF-CVE-2026-105659/105660) don't apply with
+      # HTTP/2 off and conn.host unused (PictureRail.Web); move to 1.13
+      # (and thousand_island 1.6) once they're two weeks old.
+      {:bandit, "~> 1.12.5"},
+      {:thousand_island, "~> 1.5.0"},
+      {:eqrcode, "~> 0.2.1"},
 
       # Dependencies for all targets except :host
       {:nerves_pack, "~> 0.7.2", targets: @all_targets},

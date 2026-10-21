@@ -14,7 +14,8 @@ defmodule PictureRail.View.SetupPage do
 
   alias PictureRail.{PhotoSource, Setup}
   alias PictureRail.Setup.{Field, Secret}
-  alias PictureRail.View.{Keyboard, LCARS, Theme}
+  alias PictureRail.View.{Keyboard, LCARS, QR, Theme}
+  alias PictureRail.Web
 
   @colors %{wifi: :bluey, photo_source: :sky, home_assistant: :lilac, display: :peach}
   @row_h 84
@@ -25,6 +26,15 @@ defmodule PictureRail.View.SetupPage do
   # line up as LCARS panels do.
   @control_w 200
   @row_gap 12
+  # The overview's section pills: the widest summary ("Immich · 12 albums
+  # · 12345 photos") fits.
+  @section_w 480
+  @section_h 96
+  # LCARS.heading/2's height
+  @heading_h 38
+  # the pairing column beside the QR code
+  @about_h 400
+  @phone_title "Settings on your phone"
 
   # -- What to show --
 
@@ -133,21 +143,41 @@ defmodule PictureRail.View.SetupPage do
   def blocks(ctx, :setup) do
     heading = {:heading, Theme.hex(:orange), "Settings"}
 
-    rows =
-      for section <- Setup.sections() do
-        pill =
-          LCARS.pill(
-            label: String.upcase(Setup.label(section)),
-            sub: section_summary(section, ctx.settings, ctx.photos, Map.get(ctx, :network)),
-            color: Theme.hex(@colors[section]),
-            height: 96,
-            attrs: [Event.on_press({:setup_open, section})]
+    case phone(ctx) do
+      {phone_h, about} when not ctx.portrait? ->
+        # beside the pills, on the first page: the pills shrink to fit
+        pill_h =
+          Kernel.min(@section_h, Float.floor((ctx.content_h - @heading_h - 4 * @row_gap) / 4))
+
+        pills =
+          column(
+            [width(px(section_w(ctx))), spacing(@row_gap)],
+            [LCARS.heading(Theme.hex(:orange), "Settings") | section_pills(ctx, pill_h)]
           )
 
-        {:row, 96, [pill], heading}
-      end
+        phone =
+          column([width(fill()), spacing(@row_gap)], [
+            LCARS.heading(Theme.hex(:sky), @phone_title),
+            about
+          ])
 
-    [heading | rows]
+        h = Kernel.max(@heading_h + 4 * (pill_h + @row_gap), @heading_h + @row_gap + phone_h)
+        [{:block, h, row([spacing(48)], [pills, phone])}]
+
+      phone ->
+        rows = for pill <- section_pills(ctx, @section_h), do: {:row, @section_h, [pill], heading}
+
+        phone_blocks =
+          case phone do
+            {phone_h, about} ->
+              [{:heading, Theme.hex(:sky), @phone_title}, {:block, phone_h, about}]
+
+            nil ->
+              []
+          end
+
+        [heading | rows] ++ phone_blocks
+    end
   end
 
   def blocks(ctx, {:setup, section}) do
@@ -166,6 +196,21 @@ defmodule PictureRail.View.SetupPage do
     end
   end
 
+  defp section_pills(ctx, h) do
+    for section <- Setup.sections() do
+      LCARS.pill(
+        label: String.upcase(Setup.label(section)),
+        sub: section_summary(section, ctx.settings, ctx.photos, Map.get(ctx, :network)),
+        color: Theme.hex(@colors[section]),
+        height: h,
+        width: px(section_w(ctx)),
+        attrs: [Event.on_press({:setup_open, section})]
+      )
+    end
+  end
+
+  defp section_w(ctx), do: Kernel.min(@section_w, ctx.content_w)
+
   defp section_blocks(ctx, setup, section) do
     public = ctx.settings.settings
     color = Theme.hex(@colors[section])
@@ -173,6 +218,63 @@ defmodule PictureRail.View.SetupPage do
     source_picker(ctx, setup, color) ++
       Enum.flat_map(field_rows(setup, public, ctx.photos), &field_blocks(ctx, &1, color)) ++
       footer(ctx, setup)
+  end
+
+  # -- Settings on your phone --
+
+  @doc ~s{A pairing code as the frame shows it: `"123 456"`.}
+  @spec code(String.t()) :: String.t()
+  def code(code), do: String.slice(code, 0, 3) <> " " <> String.slice(code, 3, 3)
+
+  # While connected: a QR code of the web page's pairing link (`Web`), its
+  # address by name and the code to type there, and forgetting the
+  # devices paired so far, as `{height, element}`; `nil` otherwise.
+  defp phone(ctx) do
+    with %{status: :connected, ip: ip} when is_binary(ip) <- Map.get(ctx, :network),
+         %{code: code} when is_binary(code) <- Map.get(ctx, :pairing) do
+      {side, qr} = QR.render(Web.pair_url(ip, code), 7)
+
+      small = fn text ->
+        el(
+          [
+            Font.family("Noto Sans"),
+            Font.size(Theme.size(:small)),
+            Font.color(Theme.color(:almond))
+          ],
+          text(text)
+        )
+      end
+
+      forget =
+        LCARS.pill(
+          label: "FORGET DEVICES",
+          color: Theme.hex(:mauve),
+          height: 64,
+          width: px(@control_w),
+          attrs: [Event.on_press(:forget_paired)]
+        )
+
+      about =
+        column([spacing(10), center_y()], [
+          small.("Scan the code with your phone, or open"),
+          el(
+            [
+              Font.family("Noto Sans"),
+              Font.size(Theme.size(:label)),
+              Font.color(Theme.color(:white))
+            ],
+            text(Web.local_url())
+          ),
+          small.("and enter"),
+          el([Font.size(72), Font.color(Theme.color(:sky))], text(code(code))),
+          small.("For pasting keys and tokens. Wi-Fi is set here."),
+          forget
+        ])
+
+      {Kernel.max(side, @about_h), row([spacing(32)], [qr, about])}
+    else
+      _ -> nil
+    end
   end
 
   # -- Wi-Fi --

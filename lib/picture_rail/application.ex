@@ -18,7 +18,7 @@ defmodule PictureRail.Application do
         network() ++
         [
           PictureRail.HA.Supervisor
-        ] ++ view() ++ firmware_guard()
+        ] ++ PictureRail.Web.children() ++ view() ++ firmware_guard()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: PictureRail.Supervisor)
   end

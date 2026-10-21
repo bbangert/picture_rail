@@ -11,6 +11,7 @@ defmodule PictureRail.App do
   | `:slideshow` | the photo on screen and the one fading out |
   | `:setup` | the Setup page's editor |
   | `:network` | Wi-Fi status, networks around, a join on trial |
+  | `:pairing` | the code for pairing a phone with the settings web page |
   | `:ha` | Home Assistant status and the panel view's slice of the model |
 
   Outside processes (the settings watcher, the orientation sensor, the
@@ -27,6 +28,7 @@ defmodule PictureRail.App do
       controller!(name: :settings, module: PictureRail.App.Settings),
       controller!(name: :orientation, module: PictureRail.App.Orientation),
       controller!(name: :network, module: PictureRail.App.Network),
+      controller!(name: :pairing, module: PictureRail.App.Pairing),
       controller!(
         name: :setup,
         module: PictureRail.App.Setup,
