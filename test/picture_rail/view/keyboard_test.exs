@@ -11,7 +11,7 @@ defmodule PictureRail.View.KeyboardTest do
     [r1, r2, r3, r4] = Keyboard.layout(:letters, :off, :text)
     assert labels(r1) == "qwertyuiop"
     assert labels(r2) == "asdfghjkl"
-    assert [{:shift, "⇧", _} | _] = r3
+    assert [{:shift, "SHIFT", _} | _] = r3
     assert List.last(r3) |> elem(0) == :backspace
 
     assert Enum.map(r4, &elem(&1, 0)) ==
@@ -92,6 +92,22 @@ defmodule PictureRail.View.KeyboardTest do
         {key, _, _} <- row,
         mode <- [:native, :masked] do
       assert {:virtual_key, _} = Event.virtual_key(Keyboard.key_spec(key, mode, pid))
+    end
+  end
+
+  # Antonio (and Noto Sans) have ASCII and these, but no arrows or ⌫-like
+  # symbols (checked with fc-query).
+  @drawable ~c"‹›•€£¥"
+
+  test "every label is drawable in the bundled fonts" do
+    for layer <- [:letters, :symbols],
+        shift <- [:off, :once, :caps],
+        type <- [:text, :url],
+        mode <- [:native, :masked],
+        row <- Keyboard.layout(layer, shift, type, mode),
+        {_key, label, _} <- row,
+        c <- String.to_charlist(label) do
+      assert c in 0x20..0x7E or c in @drawable, "#{label} has #{<<c::utf8>>}"
     end
   end
 end

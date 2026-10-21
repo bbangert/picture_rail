@@ -21,6 +21,9 @@ defmodule PictureRail.View.Keyboard do
   layer live in app state, and the keys are re-rendered with the cased
   letters.
 
+  Labels use only characters Antonio has (it has no arrows or ⌫-style
+  symbols; the test checks).
+
   Keys: `{:char, text}`, `:space`, `:backspace`, `:left`, `:right`,
   `:shift`, `{:layer, :letters | :symbols}`, `:done`, `:cancel`, and
   `:reveal` (the editor's SHOW/HIDE for secrets).
@@ -74,12 +77,12 @@ defmodule PictureRail.View.Keyboard do
 
     shift_label =
       case {layer, shift} do
-        {:letters, _} -> "⇧"
+        {:letters, _} -> "SHIFT"
         {:symbols, :off} -> "#+="
         {:symbols, _} -> "123"
       end
 
-    caret = if mode == :native, do: [{:left, "◀", 1}, {:right, "▶", 1}], else: []
+    caret = if mode == :native, do: [{:left, "‹", 1}, {:right, "›", 1}], else: []
 
     layer_key =
       if layer == :letters,
@@ -90,7 +93,7 @@ defmodule PictureRail.View.Keyboard do
       [
         chars(r1),
         chars(r2),
-        [{:shift, shift_label, 1.5}] ++ chars(r3) ++ [{:backspace, "⌫", 1.5}],
+        [{:shift, shift_label, 1.5}] ++ chars(r3) ++ [{:backspace, "DEL", 1.5}],
         [layer_key] ++ caret ++ [{:space, "SPACE", 4}, {:cancel, "CANCEL", 2}, {:done, "DONE", 2}]
       ]
   end

@@ -469,7 +469,7 @@ defmodule PictureRail.View.SetupPage do
 
     {shown, color} =
       cond do
-        typed != "" -> {String.duplicate("•", String.length(typed)) <> "▏", :white}
+        typed != "" -> {String.duplicate("•", String.length(typed)) <> "|", :white}
         set? -> {"•••• set, type to replace", :grey}
         true -> {"type it", :grey}
       end
