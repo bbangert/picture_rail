@@ -1,11 +1,18 @@
 defmodule PictureRail.Immich.Source do
   @moduledoc """
   Immich as a photo source (`PictureRail.PhotoSource`): photos from the
-  chosen albums on an Immich server.
+  chosen albums on an Immich server, kept by `PictureRail.Immich.Cache`.
+
+  `choices/2` and `check/1` talk to the server with the settings they're
+  given (the Setup page's, possibly unsaved), through
+  `PictureRail.Immich.Client`; extra Req options for them can be set with
+  `config :picture_rail, PictureRail.Immich.Source, req_options: [...]`
+  (tests stub the server this way).
   """
 
   @behaviour PictureRail.PhotoSource
 
+  alias PictureRail.Immich.{Album, Cache, Client}
   alias PictureRail.Settings
   alias PictureRail.Setup.Field
 
@@ -46,6 +53,84 @@ defmodule PictureRail.Immich.Source do
 
   @impl PictureRail.PhotoSource
   def validate(config), do: {:ok, config}
+
+  @impl PictureRail.PhotoSource
+  def choices("album_ids", config) do
+    case config |> client() |> Client.list_albums() do
+      {:ok, albums} when is_list(albums) ->
+        {:ok,
+         albums
+         |> Enum.sort_by(&String.downcase(&1.name))
+         |> Enum.map(&{&1.id, album_label(&1)})}
+
+      other ->
+        {:error, describe(other)}
+    end
+  end
+
+  def choices(key, _config), do: {:error, "no choices for #{key}"}
+
+  defp album_label(%Album{name: name, asset_count: 1}), do: "#{name} (1 photo)"
+
+  defp album_label(%Album{name: name, asset_count: n}) when is_integer(n),
+    do: "#{name} (#{n} photos)"
+
+  defp album_label(%Album{name: name}), do: name
+
+  @doc """
+  Reaches the server, checks it's a version the frame can talk to, and
+  that the key may list albums (a key without `album.read`, or a wrong
+  one, fails here rather than in the slideshow).
+  """
+  @impl PictureRail.PhotoSource
+  def check(config) do
+    client = client(config)
+
+    with :ok <- Client.ping(client),
+         {:ok, _version} <- Client.version(client),
+         {:ok, _albums} <- Client.list_albums(client) do
+      :ok
+    else
+      other -> {:error, describe(other)}
+    end
+  end
+
+  defp client(config) do
+    options =
+      :picture_rail |> Application.get_env(__MODULE__, []) |> Keyword.get(:req_options, [])
+
+    Client.new(%Settings.Immich{url: config["url"], api_key: config["api_key"]}, options)
+  end
+
+  defp describe({:error, :offline}), do: "Can't reach the server"
+  defp describe({:error, :invalid_key}), do: "API key rejected"
+  defp describe({:error, {:missing_permission, message}}), do: message
+  defp describe({:error, {:http_error, status}}), do: "The server answered #{status}"
+  defp describe(_other), do: "Unexpected answer from the server"
+
+  @impl PictureRail.PhotoSource
+  def child_spec(opts),
+    do: %{id: Cache, start: {Cache, :start_link, [[name: Keyword.fetch!(opts, :name)]]}}
+
+  @impl PictureRail.PhotoSource
+  def next(server) do
+    case Cache.next(server) do
+      {:ok, %{asset: asset, path: path, clip: clip}} ->
+        {:ok, %{id: asset.id, path: path, width: asset.width, height: asset.height, clip: clip}}
+
+      :none ->
+        :none
+    end
+  end
+
+  @impl PictureRail.PhotoSource
+  defdelegate stats(server), to: Cache
+
+  @impl PictureRail.PhotoSource
+  def status_message(:invalid_key), do: "Immich API key rejected"
+  def status_message({:missing_permission, detail}), do: detail
+  def status_message(:no_albums), do: "No albums found"
+  def status_message(_status), do: nil
 
   @doc """
   The Immich settings the client and cache use, from the settings' photo

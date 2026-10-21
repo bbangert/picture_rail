@@ -25,7 +25,8 @@ defmodule PictureRail.Immich.Cache do
   (a download's files deleted), so a deselected album can't slip in.
   Timers carry a token, so a stale one is ignored.
 
-  Status (reported to the `:immich` controller): `:unconfigured`,
+  It is the Immich photo source's process (`PictureRail.Immich.Source`).
+  Status (reported to the `:photos` controller): `:unconfigured`,
   `:connecting`, `:online`, `:offline`, `:invalid_key`,
   `{:missing_permission, message}` or `:no_albums`.
   """
@@ -665,7 +666,7 @@ defmodule PictureRail.Immich.Cache do
 
   defp notify_app(stats) do
     if Process.whereis(PictureRail.App),
-      do: Solve.dispatch(PictureRail.App, :immich, :stats, stats)
+      do: Solve.dispatch(PictureRail.App, :photos, :stats, stats)
 
     :ok
   end

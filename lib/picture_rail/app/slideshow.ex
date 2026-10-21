@@ -4,7 +4,7 @@ defmodule PictureRail.App.Slideshow do
   fading out.
 
   Every `slideshow.interval_ms` it takes the next photo through the
-  `:next_photo` callback (`PictureRail.Immich.Cache.next/1`, which never
+  `:next_photo` callback (`PictureRail.PhotoSource.next/0`, which never
   waits). The previous photo stays exposed for the length of the fade
   (`slideshow.fade_ms`) plus a margin, so the view can crossfade. While the
   panel is up the slideshow doesn't advance; it carries on at the next tick
@@ -66,11 +66,9 @@ defmodule PictureRail.App.Slideshow do
     %{state | timer: Process.send_after(self(), :tick, ms)}
   end
 
-  defp to_photo(%{asset: asset, path: path}) do
-    portrait? =
-      is_integer(asset.width) and is_integer(asset.height) and asset.height > asset.width
-
-    %{path: path, id: asset.id, portrait?: portrait?}
+  defp to_photo(%{id: id, path: path, width: width, height: height}) do
+    portrait? = is_integer(width) and is_integer(height) and height > width
+    %{path: path, id: id, portrait?: portrait?}
   end
 
   defp panel_visible?(%{panel: %{visible?: true}}), do: true

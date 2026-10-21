@@ -11,7 +11,7 @@ defmodule PictureRail.Application do
           {Task.Supervisor, name: PictureRail.TaskSup},
           PictureRail.Settings.Watcher,
           {PictureRail.App, name: PictureRail.App},
-          PictureRail.Immich.Cache,
+          PictureRail.PhotoSource.Supervisor,
           PictureRail.HA.Supervisor
         ] ++ view() ++ firmware_guard()
 

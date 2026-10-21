@@ -7,17 +7,15 @@ defmodule PictureRail.App do
   | `:settings` | settings without credentials, file status |
   | `:orientation` | the UI's orientation and rotation |
   | `:panel` | whether the panel is up, its view, the idle timeout |
-  | `:immich` | photo cache status and counts |
+  | `:photos` | the photo source's status and counts |
   | `:slideshow` | the photo on screen and the one fading out |
   | `:ha` | Home Assistant status and the panel view's slice of the model |
 
   Outside processes (the settings watcher, the orientation sensor, the
-  Immich cache, the Home Assistant connection) feed it with
+  photo source, the Home Assistant connection) feed it with
   `Solve.dispatch/4`; the viewport subscribes with `Solve.Lookup`.
   """
   use Solve
-
-  alias PictureRail.Immich.Cache
 
   @impl Solve
   def controllers do
@@ -25,7 +23,7 @@ defmodule PictureRail.App do
       controller!(name: :settings, module: PictureRail.App.Settings),
       controller!(name: :orientation, module: PictureRail.App.Orientation),
       controller!(name: :panel, module: PictureRail.App.Panel, dependencies: [:settings]),
-      controller!(name: :immich, module: PictureRail.App.Immich),
+      controller!(name: :photos, module: PictureRail.App.Photos),
       controller!(
         name: :slideshow,
         module: PictureRail.App.Slideshow,
@@ -55,9 +53,7 @@ defmodule PictureRail.App do
     end)
   end
 
-  # The cache never waits on the network; if it isn't running, there's
+  # The source never waits on the network; if none is running, there's
   # nothing to show.
-  defp next_photo do
-    if Process.whereis(Cache), do: Cache.next(), else: :none
-  end
+  defp next_photo, do: PictureRail.PhotoSource.next()
 end

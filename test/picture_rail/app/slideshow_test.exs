@@ -2,7 +2,6 @@ defmodule PictureRail.App.SlideshowTest do
   use ExUnit.Case, async: true
 
   alias PictureRail.App.Slideshow
-  alias PictureRail.Immich.Asset
 
   @deps %{
     settings: %{settings: %{slideshow: %{interval_ms: 50, fade_ms: 10}}},
@@ -10,11 +9,7 @@ defmodule PictureRail.App.SlideshowTest do
   }
 
   defp entry(n, w \\ 4, h \\ 3),
-    do: %{
-      asset: %Asset{id: "p#{n}", checksum: "c", width: w, height: h},
-      path: "/cache/p#{n}.jpg",
-      clip: nil
-    }
+    do: %{id: "p#{n}", width: w, height: h, path: "/cache/p#{n}.jpg", clip: nil}
 
   # A callback that hands out the given photos in turn, then :none.
   defp photos(entries) do

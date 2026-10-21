@@ -207,7 +207,7 @@ defmodule PictureRail.View do
 
   # Nothing to show yet: a small status readout in the corner.
   defp status_block do
-    message = Status.message(solve(App, :settings), solve(App, :immich))
+    message = Status.message(solve(App, :settings), solve(App, :photos))
 
     el(
       [align_bottom(), align_left(), padding(48)],
