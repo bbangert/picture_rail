@@ -246,7 +246,7 @@ defmodule PictureRail.View do
       size: if(portrait?, do: {h, w}, else: {w, h}),
       portrait?: portrait? || false,
       panel: panel,
-      ha: solve(App, :ha) || %{status: :unconfigured, slice: nil, states: %{}},
+      ha: solve(App, :ha) || %{status: :unconfigured, slice: nil, states: %{}, names: %{}},
       setup: solve(App, :setup),
       settings: solve(App, :settings),
       photos: solve(App, :photos),

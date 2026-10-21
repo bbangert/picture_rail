@@ -49,6 +49,30 @@ defmodule PictureRail.App.HATest do
     assert area.area.area_id == "living"
   end
 
+  test "names of what's on screen, in each form; a renamed entity follows", %{
+    state: state,
+    src: src,
+    params: params
+  } do
+    deps = panel({:area, "living"})
+    %{states: states, names: names} = HA.expose(state, deps, params)
+
+    for id <- Map.keys(states), form <- [:full, :own, :device] do
+      assert names[{id, form}] == Overview.name(src, id, form)
+    end
+
+    id = "media_player.tv"
+    assert Map.has_key?(states, id)
+
+    report(id, fn es ->
+      %{es | attributes: Map.put(es.attributes, "friendly_name", "Big Light")}
+    end)
+
+    # Home Assistant reports the change: the on-screen tick moves
+    state = HA.states([id], state, deps, %{}, params)
+    assert HA.expose(state, deps, params).names[{id, :full}] == "Big Light"
+  end
+
   test "loading before the first build; gone when it was removed", %{
     state: state,
     params: params

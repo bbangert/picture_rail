@@ -18,6 +18,8 @@ defmodule PictureRail.View.Panel do
   """
   use Emerge.UI
 
+  import PictureRail.App.Panel, only: [is_setup_view: 1]
+
   alias PictureRail.HA.{Index, Overview}
   alias PictureRail.Setup
   alias PictureRail.View.{EnergyPage, Format, LCARS, SetupPage, Theme}
@@ -71,9 +73,7 @@ defmodule PictureRail.View.Panel do
 
   @doc "Whether a panel view is one of the Setup pages."
   @spec setup_view?(term()) :: boolean()
-  def setup_view?(:setup), do: true
-  def setup_view?({:setup, _section}), do: true
-  def setup_view?(_view), do: false
+  def setup_view?(view), do: is_setup_view(view)
 
   @doc "Whether an entity has a detail view (a chevron on its pill)."
   @spec detail?(String.t()) :: boolean()
@@ -555,19 +555,19 @@ defmodule PictureRail.View.Panel do
   defp swipes(:on_swipe_left, true, message), do: [Event.on_swipe_left(message)]
   defp swipes(:on_swipe_right, true, message), do: [Event.on_swipe_right(message)]
 
-  defp title(ctx), do: title(ctx.panel.view, ctx.ha.slice)
+  defp title(ctx), do: title(ctx.panel.view, ctx.ha)
 
-  defp title(:overview, _slice), do: "Home"
-  defp title(:media, _slice), do: "Media"
-  defp title(:devices, _slice), do: "Devices"
-  defp title(:energy, _slice), do: "Energy"
-  defp title(:setup, _slice), do: "Setup"
-  defp title({:setup, section}, _slice), do: Setup.label(section)
-  defp title({:summary, kind}, _slice), do: @summary_labels[kind]
-  defp title({:area, _}, %{area: area}), do: area.name
-  defp title({:entity, id}, _slice), do: Overview.name(Overview.source(), id)
-  defp title({:device, _}, %{name: name}), do: name || "Device"
-  defp title(_view, _slice), do: ""
+  defp title(:overview, _ha), do: "Home"
+  defp title(:media, _ha), do: "Media"
+  defp title(:devices, _ha), do: "Devices"
+  defp title(:energy, _ha), do: "Energy"
+  defp title(:setup, _ha), do: "Setup"
+  defp title({:setup, section}, _ha), do: Setup.label(section)
+  defp title({:summary, kind}, _ha), do: @summary_labels[kind]
+  defp title({:area, _}, %{slice: %{area: area}}), do: area.name
+  defp title({:entity, id}, ha), do: name(ha, id, :full)
+  defp title({:device, _}, %{slice: %{name: name}}), do: name || "Device"
+  defp title(_view, _ha), do: ""
 
   # -- Content --
   #
@@ -716,9 +716,7 @@ defmodule PictureRail.View.Panel do
       [hourly, {:row, 300, [EnergyPage.chart(summary, ctx.content_w, 300)], hourly}]
   end
 
-  defp blocks(ctx, view, _slice)
-       when view == :setup or (is_tuple(view) and elem(view, 0) == :setup),
-       do: SetupPage.blocks(ctx, view)
+  defp blocks(ctx, view, _slice) when is_setup_view(view), do: SetupPage.blocks(ctx, view)
 
   defp blocks(ctx, _view, slice) when slice in [nil, :loading],
     do: empty(ctx, waiting_message(ctx.ha.status))
@@ -986,7 +984,6 @@ defmodule PictureRail.View.Panel do
 
   defp entity_pill(ctx, entity_id, name_form, opts \\ []) do
     es = ctx.ha.states[entity_id]
-    src = Overview.source()
     usable? = ctx.live? and Overview.available?(es)
 
     fill =
@@ -1000,7 +997,7 @@ defmodule PictureRail.View.Panel do
 
     main =
       LCARS.pill(
-        label: String.upcase(LCARS.fit(pill_name(src, entity_id, name_form), chars)),
+        label: String.upcase(LCARS.fit(name(ctx.ha, entity_id, name_form), chars)),
         sub: LCARS.fit(Format.state(es), chars + 6),
         fill: fill,
         width: fill(),
@@ -1030,7 +1027,9 @@ defmodule PictureRail.View.Panel do
     row([width(px(ctx.pill_w)), height(px(Theme.size(:pill))), spacing(4)], children)
   end
 
-  defp pill_name(src, entity_id, form), do: Overview.name(src, entity_id, form)
+  # From the `:ha` controller (it reads the model; the view doesn't)
+  defp name(ha, entity_id, form),
+    do: Map.get(Map.get(ha, :names) || %{}, {entity_id, form}, entity_id)
 
   defp pill_fill(_color, _on?, false), do: Theme.color(:grey, 0.5)
   defp pill_fill(color, true, true), do: Theme.color(color)
@@ -1281,11 +1280,19 @@ defmodule PictureRail.View.Panel do
     ])
   end
 
+  # Keyed by entity and kind, so moving from one entity's detail to
+  # another's doesn't reuse this slider (and its drag) by position; in an
+  # el of its own, as keyed siblings must all be keyed.
   defp slider(ctx, id, kind, color, min, max, step, value) do
     value = Map.get(ctx.sliders, {id, kind}, value)
 
+    el([width(fill())], slider_input(id, kind, color, min, max, step, value))
+  end
+
+  defp slider_input(id, kind, color, min, max, step, value) do
     Input.slider(
       [
+        key({:slider, id, kind}),
         width(fill()),
         height(px(80)),
         Slider.config(

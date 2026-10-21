@@ -15,7 +15,6 @@ defmodule PictureRail.View.SetupPage do
   alias PictureRail.{PhotoSource, Setup}
   alias PictureRail.Setup.{Field, Secret}
   alias PictureRail.View.{Keyboard, LCARS, QR, Theme}
-  alias PictureRail.Web
 
   @colors %{wifi: :bluey, photo_source: :sky, home_assistant: :lilac, display: :peach}
   @row_h 84
@@ -229,56 +228,62 @@ defmodule PictureRail.View.SetupPage do
     first <> " " <> second
   end
 
-  # While connected: a QR code of the web page's pairing link (`Web`), its
-  # address by name and the code to type there, and forgetting the
-  # devices paired so far, as `{height, element}`; `nil` otherwise.
+  # While connected (the `:pairing` controller has a QR code then): the QR
+  # code of the web page's pairing link, its address by name and the code
+  # to type there, and forgetting the devices paired so far, as
+  # `{height, element}`; `nil` otherwise.
   defp phone(ctx) do
-    with %{status: :connected, ip: ip} when is_binary(ip) <- Map.get(ctx, :network),
-         %{code: code} = pairing when is_binary(code) <- Map.get(ctx, :pairing) do
-      {side, qr} = QR.render(Web.pair_url(ip, code), 7)
+    case Map.get(ctx, :pairing) do
+      %{code: code, qr: runs} = pairing when is_binary(code) and is_list(runs) ->
+        phone(pairing, code, runs)
 
-      small = fn text ->
+      _ ->
+        nil
+    end
+  end
+
+  defp phone(pairing, code, runs) do
+    {side, qr} = QR.render(runs, 7)
+
+    small = fn text ->
+      el(
+        [
+          Font.family("Noto Sans"),
+          Font.size(Theme.size(:small)),
+          Font.color(Theme.color(:almond))
+        ],
+        text(text)
+      )
+    end
+
+    forget =
+      LCARS.pill(
+        label: "FORGET DEVICES",
+        color: Theme.hex(:mauve),
+        height: 64,
+        width: px(@control_w),
+        attrs: [Event.on_press(:forget_paired)]
+      )
+
+    about =
+      column([spacing(10), center_y()], [
+        small.("Scan the code with your phone, or open"),
         el(
           [
             Font.family("Noto Sans"),
-            Font.size(Theme.size(:small)),
-            Font.color(Theme.color(:almond))
+            Font.size(Theme.size(:label)),
+            Font.color(Theme.color(:white))
           ],
-          text(text)
-        )
-      end
+          text(pairing.address)
+        ),
+        small.("and enter"),
+        el([Font.size(72), Font.color(Theme.color(:sky))], text(code(code))),
+        small.("For pasting keys and tokens. Wi-Fi is set here."),
+        forget
+        | forget_failed(pairing)
+      ])
 
-      forget =
-        LCARS.pill(
-          label: "FORGET DEVICES",
-          color: Theme.hex(:mauve),
-          height: 64,
-          width: px(@control_w),
-          attrs: [Event.on_press(:forget_paired)]
-        )
-
-      about =
-        column([spacing(10), center_y()], [
-          small.("Scan the code with your phone, or open"),
-          el(
-            [
-              Font.family("Noto Sans"),
-              Font.size(Theme.size(:label)),
-              Font.color(Theme.color(:white))
-            ],
-            text(Web.local_url())
-          ),
-          small.("and enter"),
-          el([Font.size(72), Font.color(Theme.color(:sky))], text(code(code))),
-          small.("For pasting keys and tokens. Wi-Fi is set here."),
-          forget
-          | forget_failed(pairing)
-        ])
-
-      {Kernel.max(side, @about_h), row([spacing(32)], [qr, about])}
-    else
-      _ -> nil
-    end
+    {Kernel.max(side, @about_h), row([spacing(32)], [qr, about])}
   end
 
   defp forget_failed(%{forget_failed?: true}),

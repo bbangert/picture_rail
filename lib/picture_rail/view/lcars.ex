@@ -112,7 +112,7 @@ defmodule PictureRail.View.LCARS do
         padding_each(0, 14, 8, 0),
         Font.color(Theme.color(:black)),
         Font.size(size)
-      ] ++ Keyword.get(opts, :attrs, []),
+      ] ++ pressable(Keyword.get(opts, :attrs, [])),
       el([align_right(), align_bottom()], text(String.upcase(label)))
     )
   end
@@ -163,10 +163,17 @@ defmodule PictureRail.View.LCARS do
         radius,
         padding_xy(Kernel.max(r * 0.6, 18), 0),
         Font.color(Theme.color(:black))
-      ] ++ Keyword.get(opts, :attrs, []),
+      ] ++ pressable(Keyword.get(opts, :attrs, [])),
       content
     )
   end
+
+  # A button that does something lights up while pressed, drawn natively
+  # (no message, no rerender); one with no attrs is disabled and doesn't.
+  defp pressable([]), do: []
+
+  defp pressable(attrs),
+    do: attrs ++ [Interactive.mouse_down([Background.color(Theme.color(:white))])]
 
   @doc "A section heading in `color` (hex)."
   @spec heading(non_neg_integer(), String.t()) :: term()

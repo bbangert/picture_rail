@@ -19,19 +19,25 @@ defmodule PictureRail.App.HA do
       reports them, the call fails (rolled back, and `error` set), or 10 s
       pass.
 
-  Exposes `%{status:, revision:, view:, slice:, states:, nav:, energy:, error:}`.
+  Exposes `%{status:, revision:, view:, slice:, states:, names:, nav:, energy:,
+  error:}`.
   `slice` is `PictureRail.HA.Overview`'s result for the panel's view, or
   `:loading` before the model's first build, `:gone` when what the view
   showed was removed in Home Assistant, `nil` while the panel is down.
   `states` maps each entity id on screen to its state, pending optimistic
-  values applied. Disconnected, everything stays, and `status` tells the
-  view to grey it out.
+  values applied. `names` maps `{entity_id, form}` to its display name for
+  the same entities, in each of `PictureRail.HA.Overview.name/3`'s forms
+  (`:full`, `:own`, `:device`), so the view doesn't read the model.
+  Disconnected, everything stays, and `status` tells the view to grey it
+  out.
 
   Solve calls `expose/3` after every event, so the slice is cached in this
   process per view, model revision and on-screen change (`tick`): an event
   for an entity that isn't on screen costs a map lookup.
   """
   use Solve.Controller, events: [:status, :model, :states, :call, :energy]
+
+  import PictureRail.App.Panel, only: [is_setup_view: 1]
 
   require Logger
 
@@ -161,9 +167,7 @@ defmodule PictureRail.App.HA do
   # -- The slice --
 
   # the Setup pages show nothing from Home Assistant
-  defp view(%{panel: %{view: view}})
-       when view == :setup or (is_tuple(view) and elem(view, 0) == :setup),
-       do: nil
+  defp view(%{panel: %{view: view}}) when is_setup_view(view), do: nil
 
   defp view(%{panel: %{visible?: true, view: view}}), do: view
   defp view(_deps), do: nil
@@ -203,6 +207,21 @@ defmodule PictureRail.App.HA do
   defp nav(state, params) do
     memo({:nav, state.revision, params}, fn ->
       if state.revision > 0, do: Overview.nav(source(params)), else: []
+    end)
+  end
+
+  @name_forms [:full, :own, :device]
+
+  # Names change with the model (revision) or an on-screen state's
+  # friendly_name (tick), as the slice does.
+  defp names(ids, state, params) do
+    memo({:names, ids, state.revision, state.tick, params}, fn ->
+      src = source(params)
+
+      for id <- ids,
+          form <- @name_forms,
+          into: %{},
+          do: {{id, form}, Overview.name(src, id, form)}
     end)
   end
 
@@ -264,8 +283,10 @@ defmodule PictureRail.App.HA do
     src = source(params)
     visible? = view(deps) != nil
 
+    ids = for id <- slice_ids(slice), id != nil, do: id
+
     states =
-      for id <- slice_ids(slice), id != nil, into: %{} do
+      for id <- ids, into: %{} do
         {id, with_pending(src.state.(id), state.pending[id])}
       end
 
@@ -275,6 +296,7 @@ defmodule PictureRail.App.HA do
       view: view(deps),
       slice: slice,
       states: states,
+      names: names(ids, state, params),
       nav: if(visible?, do: nav(state, params), else: []),
       # only while the panel is up, so a refresh doesn't redraw the slideshow
       energy: if(visible?, do: state.energy),

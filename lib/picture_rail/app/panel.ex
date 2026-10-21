@@ -32,6 +32,11 @@ defmodule PictureRail.App.Panel do
   use Solve.Controller,
     events: [:show, :activity, :open, :replace, :goto, :back, :page, :nav_page, :hide]
 
+  @doc "Whether a view is one of the Setup pages (`:setup`, `{:setup, section}`)."
+  defguard is_setup_view(view)
+           when view == :setup or
+                  (is_tuple(view) and tuple_size(view) == 2 and elem(view, 0) == :setup)
+
   @impl Solve.Controller
   def init(_params, _dependencies), do: fresh()
 
@@ -107,7 +112,7 @@ defmodule PictureRail.App.Panel do
   end
 
   defp busy_setup?(%{stack: [{view, _page} | _]}, %{setup: %{busy?: true}}),
-    do: view == :setup or (is_tuple(view) and elem(view, 0) == :setup)
+    do: is_setup_view(view)
 
   defp busy_setup?(_state, _deps), do: false
 
