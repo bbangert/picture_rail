@@ -412,6 +412,14 @@ defmodule PictureRail.View do
     {:noreply, state}
   end
 
+  # From one section to the next: in its place, so Back doesn't land on a
+  # section whose editor has gone.
+  def handle_info({:setup_next, section}, state) do
+    send_event(:setup, :open, section)
+    send_event(:panel, :replace, {:setup, section})
+    {:noreply, state}
+  end
+
   # the native field's text (Emerge appends the value to the message)
   def handle_info({:setup, :typed, id, value}, state) do
     send_event(:panel, :activity, nil)

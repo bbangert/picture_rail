@@ -77,10 +77,12 @@ defmodule PictureRail.Web.Page do
   end
 
   defp input(%{field: %{type: type} = f} = i) when type in [:integer, :seconds] do
+    # the field's step is the frame's button increment, not a constraint:
+    # a browser would refuse values off it (25 with min 1, step 5)
     {min, max, step, unit} =
       if type == :seconds,
         do: {seconds(f.min), seconds(f.max), "any", " s"},
-        else: {f.min, f.max, f.step || 1, ""}
+        else: {f.min, f.max, 1, ""}
 
     attrs = for {k, v} <- [min: min, max: max, step: step], v != nil, do: ~s{ #{k}="#{h(v)}"}
 

@@ -227,6 +227,10 @@ defmodule PictureRail.Web.RouterTest do
       "shown" => ["slideshow/interval_ms", "slideshow/fade_ms"]
     }
 
+    # number inputs take any whole number: 25 is off the frame's step of 5
+    page = request(ctx, :get, "/settings/display", nil, conn)
+    assert page.resp_body =~ ~r{value="25" min="1" max="\d+" step="1"}
+
     assert redirected_to(save(ctx, conn, "display", params)) =~ "saved=1"
     assert saved(ctx)["slideshow"] == %{"interval_ms" => 12_000, "fade_ms" => 750}
   end

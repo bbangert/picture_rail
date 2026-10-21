@@ -357,7 +357,7 @@ defmodule PictureRail.View.SetupPage do
              color: Theme.hex(:orange),
              height: 72,
              width: px(@control_w),
-             attrs: [Event.on_press({:setup_open, :photo_source})]
+             attrs: [Event.on_press({:setup_next, :photo_source})]
            )
          ], nil}
       ]

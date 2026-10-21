@@ -10,6 +10,8 @@ defmodule PictureRail.App.Panel do
     * `:activity` - any interaction with the panel; restarts the timeout
     * `:open` - push a view (`{:area, id}`, `{:summary, kind}`, `:media`,
       `:devices`, `:energy`, `{:device, device_id}`, `{:entity, entity_id}`)
+    * `:replace` - put a view in place of the current one (Setup's "Next":
+      there's one Setup editor, so a section doesn't stack on another)
     * `:goto` - go to a view from the navigation: it replaces the stack
       (`:overview` empties it)
     * `:back` - pop a view (to the overview at the bottom), back to the
@@ -28,7 +30,7 @@ defmodule PictureRail.App.Panel do
   Exposes `%{visible?: boolean, view: view, depth: n, page: n, nav_page: n}`.
   """
   use Solve.Controller,
-    events: [:show, :activity, :open, :goto, :back, :page, :nav_page, :hide]
+    events: [:show, :activity, :open, :replace, :goto, :back, :page, :nav_page, :hide]
 
   @impl Solve.Controller
   def init(_params, _dependencies), do: fresh()
@@ -43,6 +45,11 @@ defmodule PictureRail.App.Panel do
 
   def open(view, state, deps),
     do: %{state | visible?: true, stack: [{view, 0} | state.stack]} |> restart_timer(deps)
+
+  def replace(view, %{stack: [_ | rest]} = state, deps),
+    do: %{state | visible?: true, stack: [{view, 0} | rest]} |> restart_timer(deps)
+
+  def replace(view, state, deps), do: open(view, state, deps)
 
   def goto(:overview, state, deps),
     do: %{state | visible?: true, stack: [], root_page: 0} |> restart_timer(deps)
