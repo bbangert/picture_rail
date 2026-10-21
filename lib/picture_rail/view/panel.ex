@@ -696,6 +696,9 @@ defmodule PictureRail.View.Panel do
   defp build(item) when is_function(item, 0), do: item.()
   defp build(element), do: element
 
+  # `fun` on each item, when its page is drawn
+  defp lazy(items, fun), do: Enum.map(items, fn item -> fn -> fun.(item) end end)
+
   # A section as blocks: a heading, then rows of `per_row` items `item_h` tall.
   defp section(color, title, items, per_row, item_h) do
     heading = {:heading, color, title}
@@ -736,7 +739,7 @@ defmodule PictureRail.View.Panel do
   defp blocks(ctx, :overview, %{floors: floors, other_areas: others, devices?: devices?}) do
     tile_cols = Kernel.max(ctx.cols - 1, 2)
     tile_w = Float.floor((ctx.content_w - (tile_cols - 1) * @row_gap) / tile_cols)
-    tiles = &Enum.map(&1, fn area -> fn -> area_tile(area, tile_w) end end)
+    tiles = &lazy(&1, fn area -> area_tile(area, tile_w) end)
 
     floor_sections =
       for {%{floor: floor, areas: areas}, i} <- Enum.with_index(floors) do
@@ -859,7 +862,7 @@ defmodule PictureRail.View.Panel do
 
   defp summary_rows(ctx, kind, ids, headings) do
     ids
-    |> Enum.map(fn id -> fn -> summary_pill_for(ctx, kind, id) end end)
+    |> lazy(&summary_pill_for(ctx, kind, &1))
     |> Enum.chunk_every(ctx.cols)
     |> Enum.map(&{:row, Theme.size(:pill), &1, headings})
   end
@@ -907,7 +910,7 @@ defmodule PictureRail.View.Panel do
     section(
       Theme.kind(:device),
       title,
-      Enum.map(s.entity_ids, fn id -> fn -> entity_pill(ctx, id, :own) end end),
+      lazy(s.entity_ids, &entity_pill(ctx, &1, :own)),
       ctx.cols,
       Theme.size(:pill)
     )
@@ -919,7 +922,7 @@ defmodule PictureRail.View.Panel do
     section(
       Theme.kind(kind),
       title,
-      Enum.map(s.entity_ids, fn id -> fn -> entity_pill(ctx, id, :full) end end),
+      lazy(s.entity_ids, &entity_pill(ctx, &1, :full)),
       ctx.cols,
       Theme.size(:pill)
     )
@@ -946,7 +949,7 @@ defmodule PictureRail.View.Panel do
           section(
             Theme.kind(:device),
             "Devices",
-            Enum.map(devices, fn device -> fn -> device_pill(ctx, device) end end),
+            lazy(devices, &device_pill(ctx, &1)),
             ctx.cols,
             Theme.size(:pill)
           )
