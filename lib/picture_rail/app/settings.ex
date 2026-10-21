@@ -4,7 +4,7 @@ defmodule PictureRail.App.Settings do
   status of the settings file.
 
   Fed by `PictureRail.Settings.Watcher`. Code that needs the credentials
-  (the Immich and Home Assistant clients) reads them from
+  (the photo source and the Home Assistant client) reads them from
   `PictureRail.Settings.current/0` instead, so they never sit in UI state.
 
   Exposes:
@@ -12,7 +12,8 @@ defmodule PictureRail.App.Settings do
     * `:loaded?` - the file was read and validated
     * `:status` - `:ok`, `:missing`, `:template` (not filled in yet) or
       `{:error, messages}` (the previous settings stay in use)
-    * `:configured` - `%{immich: boolean, home_assistant: boolean}`
+    * `:configured` - `%{photo_source: boolean, home_assistant: boolean}`
+    * `:photo_source_type` - the photo source's `type` (`"immich"`), or nil
     * `:settings` - `PictureRail.Settings.public/1` of the settings
     * `:credentials_rev` - bumped when a reload changes a credential, so
       subscribers that read them hear about a new key or token (the
@@ -34,13 +35,10 @@ defmodule PictureRail.App.Settings do
   end
 
   def loaded({settings, status}, {old, _status, rev}) do
-    rev = if credentials(settings) == credentials(old), do: rev, else: rev + 1
-    {settings, status, rev}
-  end
+    rev =
+      if Settings.credentials(settings) == Settings.credentials(old), do: rev, else: rev + 1
 
-  defp credentials(settings) do
-    {settings.immich && settings.immich.api_key,
-     settings.home_assistant && settings.home_assistant.token}
+    {settings, status, rev}
   end
 
   @impl Solve.Controller
@@ -49,9 +47,10 @@ defmodule PictureRail.App.Settings do
       loaded?: status == :ok,
       status: status,
       configured: %{
-        immich: settings.immich != nil,
+        photo_source: settings.photo_source != nil,
         home_assistant: settings.home_assistant != nil
       },
+      photo_source_type: settings.photo_source && settings.photo_source.module.type(),
       settings: Settings.public(settings),
       credentials_rev: credentials_rev
     }

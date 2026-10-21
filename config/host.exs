@@ -31,5 +31,13 @@ config :nerves_uevent, manage_udev: false
 
 # Tests drive controllers and modules directly; don't open a window.
 if config_env() == :test do
-  config :picture_rail, start_view: false, data_dir: Path.expand("../tmp/test-data", __DIR__)
+  config :picture_rail,
+    start_view: false,
+    start_network: false,
+    start_web: false,
+    data_dir: Path.expand("../tmp/test-data", __DIR__)
+
+  # Immich.Source's "Test" and album list talk to a Req.Test stub.
+  config :picture_rail, PictureRail.Immich.Source,
+    req_options: [plug: {Req.Test, PictureRail.Immich.Source}]
 end

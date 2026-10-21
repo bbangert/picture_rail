@@ -14,6 +14,10 @@ config :shoehorn, init: [:nerves_runtime, :nerves_pack]
 config :nerves_runtime, startup_guard_enabled: false
 config :picture_rail, firmware_guard: true
 
+# Wi-Fi setup on the frame drives VintageNet; the settings web page is on
+# port 80.
+config :picture_rail, network_backend: PictureRail.Network.VintageNet, web_port: 80
+
 # Erlinit can be configured without a rootfs_overlay. See
 # https://github.com/nerves-project/erlinit/ for more information on
 # configuring erlinit.
@@ -87,6 +91,11 @@ config :mdns_lite,
       protocol: "sftp-ssh",
       transport: "tcp",
       port: 22
+    },
+    %{
+      protocol: "http",
+      transport: "tcp",
+      port: 80
     },
     %{
       protocol: "epmd",

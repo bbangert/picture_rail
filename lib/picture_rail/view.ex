@@ -34,8 +34,9 @@ defmodule PictureRail.View do
 
   require Logger
 
-  alias PictureRail.App
-  alias PictureRail.View.{Config, Panel, Status}
+  alias PictureRail.{App, Network}
+  alias PictureRail.View.{Config, Panel, SetupPage, Status}
+  alias PictureRail.Web.Pairing
 
   @slider_send_ms 250
   # how far a held finger may drift and still count as a long press
@@ -68,6 +69,8 @@ defmodule PictureRail.View do
     :exit, _ -> nil
   end
 
+  @first_boot_ms 3_000
+
   @impl Viewport
   def mount(opts) do
     config = Config.build()
@@ -90,6 +93,8 @@ defmodule PictureRail.View do
       slider_timers: %{}
     }
 
+    # a frame with nothing set up opens Wi-Fi setup by itself
+    Process.send_after(self(), :first_boot, @first_boot_ms)
     {:ok, state, config}
   end
 
@@ -207,7 +212,7 @@ defmodule PictureRail.View do
 
   # Nothing to show yet: a small status readout in the corner.
   defp status_block do
-    message = Status.message(solve(App, :settings), solve(App, :immich))
+    message = Status.message(solve(App, :settings), solve(App, :photos), solve(App, :network))
 
     el(
       [align_bottom(), align_left(), padding(48)],
@@ -237,13 +242,23 @@ defmodule PictureRail.View do
     {w, h} = state.size || {1920, 1080}
     portrait? = orientation && orientation.portrait?
 
-    Panel.render(%{
+    ctx = %{
       size: if(portrait?, do: {h, w}, else: {w, h}),
       portrait?: portrait? || false,
       panel: panel,
       ha: solve(App, :ha) || %{status: :unconfigured, slice: nil, states: %{}},
+      setup: solve(App, :setup),
+      settings: solve(App, :settings),
+      photos: solve(App, :photos),
+      network: solve(App, :network),
+      pairing: solve(App, :pairing),
       sliders: state.sliders
-    })
+    }
+
+    # the keyboard takes the whole screen while a Setup field is edited
+    if Panel.setup_view?(panel.view) and match?(%{editing: id} when id != nil, ctx.setup),
+      do: SetupPage.editor(ctx),
+      else: Panel.render(ctx)
   end
 
   # Rotation spike: a target in each corner and the last one tapped, to
@@ -383,6 +398,41 @@ defmodule PictureRail.View do
     {:noreply, state}
   end
 
+  # The Setup page's "Forget devices": every web page session ends.
+  def handle_info(:forget_paired, state) do
+    send_event(:panel, :activity, nil)
+    if Process.whereis(Pairing), do: send_event(:pairing, :forgot, Pairing.forget())
+    {:noreply, state}
+  end
+
+  # The Setup page: open a section, or an edit in the open one.
+  def handle_info({:setup_open, section}, state) do
+    send_event(:setup, :open, section)
+    send_event(:panel, :open, {:setup, section})
+    {:noreply, state}
+  end
+
+  # From one section to the next: in its place, so Back doesn't land on a
+  # section whose editor has gone.
+  def handle_info({:setup_next, section}, state) do
+    send_event(:setup, :open, section)
+    send_event(:panel, :replace, {:setup, section})
+    {:noreply, state}
+  end
+
+  # the native field's text (Emerge appends the value to the message)
+  def handle_info({:setup, :typed, id, value}, state) do
+    send_event(:panel, :activity, nil)
+    send_event(:setup, :set, {id, value})
+    {:noreply, state}
+  end
+
+  def handle_info({:setup, event, payload}, state) do
+    send_event(:panel, :activity, nil)
+    send_event(:setup, event, payload)
+    {:noreply, state}
+  end
+
   def handle_info({:call, request}, state) do
     send_event(:panel, :activity, nil)
     send_event(:ha, :call, request)
@@ -416,6 +466,24 @@ defmodule PictureRail.View do
     {value, sliders} = Map.pop(state.sliders, key)
     if value, do: send_event(:ha, :call, slider_request(entity_id, kind, value))
     {:noreply, %{state | sliders: sliders, slider_timers: Map.delete(state.slider_timers, key)}}
+  end
+
+  def handle_info(:first_boot, state) do
+    backend = Network.Backend.impl()
+
+    with %{configured: configured} <- solve(App, :settings),
+         true <-
+           Network.first_boot?(
+             backend.configured_networks?(),
+             backend.ethernet_up?(),
+             configured
+           ) do
+      Logger.info("View: nothing set up; opening Wi-Fi setup")
+      send_event(:setup, :open, :wifi)
+      send_event(:panel, :goto, {:setup, :wifi})
+    end
+
+    {:noreply, state}
   end
 
   def handle_info({:spike_tap, name}, state) do

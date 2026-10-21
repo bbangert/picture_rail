@@ -18,6 +18,9 @@ config :nerves, :firmware, rootfs_overlay: "rootfs_overlay"
 
 config :nerves, source_date_epoch: "1792460562"
 
+# Where photos can come from (PictureRail.PhotoSource implementations).
+config :picture_rail, photo_sources: [PictureRail.Immich.Source]
+
 if Mix.target() == :host do
   import_config "host.exs"
 else

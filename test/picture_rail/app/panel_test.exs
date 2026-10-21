@@ -63,4 +63,39 @@ defmodule PictureRail.App.PanelTest do
     refute exposed(state).visible?
     refute_receive {:timeout, _}
   end
+
+  test "Setup's Next replaces the section; Back goes to what was under it" do
+    state = Panel.open(:setup, Panel.init(nil, @deps), @deps)
+    state = Panel.open({:setup, :wifi}, state, @deps)
+    state = Panel.replace({:setup, :photo_source}, state, @deps)
+    assert %{view: {:setup, :photo_source}, depth: 2} = exposed(state)
+    assert %{view: :setup, depth: 1} = exposed(Panel.back(nil, state, @deps))
+
+    # first boot: Wi-Fi alone, then Next: Back goes to the overview
+    first = Panel.goto({:setup, :wifi}, Panel.init(nil, @deps), @deps)
+    first = Panel.replace({:setup, :photo_source}, first, @deps)
+    assert %{view: :overview} = exposed(Panel.back(nil, first, @deps))
+
+    # nothing open: it's an open
+    assert %{view: {:setup, :wifi}, depth: 1} =
+             exposed(Panel.replace({:setup, :wifi}, Panel.init(nil, @deps), @deps))
+  end
+
+  test "a busy Setup page holds the panel for five minutes" do
+    deps = %{settings: %{settings: %{panel: %{timeout_ms: 30_000}}}, setup: %{busy?: true}}
+    setup = %{stack: [{{:setup, :display}, 0}]}
+
+    assert Panel.timeout_ms(setup, deps) == 300_000
+    assert Panel.timeout_ms(%{stack: [{:setup, 0}]}, deps) == 300_000
+    assert Panel.timeout_ms(setup, %{deps | setup: %{busy?: false}}) == 30_000
+    assert Panel.timeout_ms(%{stack: []}, deps) == 30_000
+
+    # busy only once the timer was set (first boot opens Setup with the
+    # panel): checked again when the time is up
+    idle = %{settings: deps.settings, setup: %{busy?: false}}
+    state = Panel.goto({:setup, :wifi}, Panel.init(nil, idle), idle)
+    state = Panel.timed_out(state.token, state, deps)
+    assert exposed(state).visible?
+    assert exposed(Panel.timed_out(state.token, state, idle)).visible? == false
+  end
 end

@@ -3,19 +3,43 @@ defmodule PictureRail.View.Status do
   What to say on screen while there's no photo to show.
   """
 
-  @doc "A short status line from the `:settings` and `:immich` controllers."
-  @spec message(map() | nil, map() | nil) :: String.t()
-  def message(settings, immich)
+  alias PictureRail.PhotoSource
 
-  def message(%{status: status}, _immich) when status in [:missing, :template],
-    do: "Set up picture_rail.json"
+  @doc """
+  A short status line from the `:settings`, `:photos` and `:network`
+  controllers. With no photo source yet it points at the Setup page: Wi-Fi
+  first if there's no network.
+  """
+  @spec message(map() | nil, map() | nil, map() | nil) :: String.t()
+  def message(settings, photos, network \\ nil)
 
-  def message(%{status: {:error, _}}, _immich), do: "picture_rail.json has errors"
-  def message(%{configured: %{immich: false}}, _immich), do: "Immich isn't set up"
-  def message(_settings, %{status: :invalid_key}), do: "Immich API key rejected"
-  def message(_settings, %{status: {:missing_permission, detail}}), do: detail
-  def message(_settings, %{status: :no_albums}), do: "No albums found"
-  def message(_settings, %{status: :offline}), do: "Immich offline"
-  def message(_settings, %{status: :online, photos: 0}), do: "The albums are empty"
-  def message(_settings, _immich), do: "Loading photos"
+  def message(%{status: {:error, _}}, _photos, _network), do: "picture_rail.json has errors"
+
+  def message(%{configured: %{photo_source: true}} = settings, photos, _network),
+    do: photo_message(settings, photos)
+
+  def message(_settings, _photos, %{status: :connected}), do: "Tap to set up photos"
+  def message(_settings, _photos, _network), do: "Tap to set up Wi-Fi"
+
+  defp photo_message(settings, %{status: status} = photos) do
+    source = source(settings)
+
+    case status do
+      :offline -> "#{if source, do: source.label(), else: "Photos"} offline"
+      :online when photos.photos == 0 -> "No photos to show"
+      generic when generic in [:unconfigured, :connecting, :online] -> "Loading photos"
+      own -> (source && PhotoSource.status_message(source, own)) || "Loading photos"
+    end
+  end
+
+  defp photo_message(_settings, _photos), do: "Loading photos"
+
+  defp source(%{photo_source_type: type}) when is_binary(type) do
+    case PhotoSource.module_for(type) do
+      {:ok, module} -> module
+      :error -> nil
+    end
+  end
+
+  defp source(_settings), do: nil
 end

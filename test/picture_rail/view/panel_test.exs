@@ -118,4 +118,17 @@ defmodule PictureRail.View.PanelTest do
     assert Panel.waiting_message({:auth_failed, "invalid"}) == "Home Assistant refused the token"
     assert Panel.waiting_message(:unconfigured) == "Home Assistant isn't set up"
   end
+
+  test "Setup is in the navigation, also when Home Assistant has none" do
+    assert Panel.nav_items(%{ha: %{status: :unconfigured}}) == [{:view, :setup, "Setup"}]
+
+    assert Panel.nav_items(%{ha: %{nav: [{:view, :overview, "Overview"}]}}) == [
+             {:view, :overview, "Overview"},
+             {:view, :setup, "Setup"}
+           ]
+
+    assert Panel.setup_view?(:setup)
+    assert Panel.setup_view?({:setup, :display})
+    refute Panel.setup_view?(:overview)
+  end
 end

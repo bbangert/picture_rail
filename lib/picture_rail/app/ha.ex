@@ -160,6 +160,11 @@ defmodule PictureRail.App.HA do
 
   # -- The slice --
 
+  # the Setup pages show nothing from Home Assistant
+  defp view(%{panel: %{view: view}})
+       when view == :setup or (is_tuple(view) and elem(view, 0) == :setup),
+       do: nil
+
   defp view(%{panel: %{visible?: true, view: view}}), do: view
   defp view(_deps), do: nil
 

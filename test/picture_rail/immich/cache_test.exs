@@ -110,7 +110,15 @@ defmodule PictureRail.Immich.CacheTest do
 
   defp settings(window) do
     %Settings{
-      immich: %Settings.Immich{url: "http://immich", api_key: "k", album_ids: ["a1"]},
+      photo_source: %Settings.PhotoSource{
+        module: PictureRail.Immich.Source,
+        config: %{
+          "url" => "http://immich",
+          "api_key" => "k",
+          "album_ids" => ["a1"],
+          "album_names" => []
+        }
+      },
       cache: %{window: window, include_live_photos: true}
     }
   end

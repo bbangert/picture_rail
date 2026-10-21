@@ -103,18 +103,72 @@ before then, it falls back to the previous firmware:
 ssh -i .ssh/picture_rail_ed25519 -s <device-ip> fwup < _build/frame156_dev/nerves/images/picture_rail.fw
 ```
 
+## Setting up
+
+Everything can be set up on the frame. Editing the settings file
+([Settings](#settings)) still works too.
+
+On first boot (no Wi-Fi saved, no Ethernet and nothing set up), the frame
+opens Setup on its Wi-Fi page a few seconds after it starts. Any other
+time, tap the screen and choose **Setup**, the last item in the panel's
+navigation. Setup has four sections:
+
+- **Wi-Fi**: choose a network (or OTHER NETWORK... for a hidden one), type
+  the password on the on-screen keyboard and tap JOIN. The frame tries the
+  network for up to 30 seconds and saves it only once it has an address.
+  A wrong password, or a network out of reach, puts the previous one back.
+- **Photos**: the photo source and its settings. For Immich, that's the
+  server URL and the API key, then LOAD lists your albums to choose from.
+  TEST checks the connection without saving.
+- **Home Assistant**: the URL and a long-lived access token.
+- **Slideshow & panel**: the photo interval and fade, how many photos
+  are kept ready, Live Photos, and the panel's timings.
+
+Changes are kept as a draft until SAVE, which checks them as the settings
+file is checked. DISCARD drops the draft.
+
+### From a phone or laptop
+
+Keys and tokens are long to type on the frame, so the frame also serves a
+settings page on your network (port 80, or 4080 on the host):
+`http://<hostname>.local`, advertised over mDNS. While the frame is
+connected, Setup shows a QR code, the address and an 8-digit code beside
+its sections.
+
+- Scanning the QR code opens the page with the code filled in: tap Pair.
+- In any other browser, open the address and type the code.
+
+Each code pairs one device and then changes; it also changes by itself
+every 30 minutes, and five wrong tries change it and lock pairing for a
+minute (doubling each time, up to an hour; an hour without wrong tries
+starts it over). A paired browser stays paired for 12 hours. FORGET
+DEVICES on the frame logs every paired browser out and lifts a lockout.
+The page only answers to the frame's own name or an IP address, and
+refuses posts from other sites.
+
+The page has the same sections as the frame, apart from Wi-Fi (changing it
+from the network you're on would cut the page off). Keys and tokens are
+never shown back: leave the field empty to keep the saved one. Changing a
+server's address (or turning off its certificate check) needs its key or
+token entered again, so a saved one is only ever sent to the server it was
+saved for. Albums are
+listed from the saved connection, so on a new frame save the URL and key
+first. The page is plain HTTP on your local network, like the Home
+Assistant connection can be: pair only on a network you trust.
+
 ## Settings
 
 Settings live in a JSON file in the data directory: `/root/picture_rail.json`
-on the device (`tmp/data/picture_rail.json` on the host). On first boot
-Picture Rail writes a template there to fill in. Edit it over SSH; Picture Rail
-notices changes within ten seconds, or run `PictureRail.Settings.reload()`
-in the device's IEx shell to see any validation errors straight away. An
-invalid file is logged and the previous settings stay in use.
+on the device (`tmp/data/picture_rail.json` on the host). There's none until
+something is set up. You can also edit it over SSH; Picture Rail notices
+changes within ten seconds, or run `PictureRail.Settings.reload()` in the
+device's IEx shell to see any validation errors straight away. An invalid
+file is logged and the previous settings stay in use.
 
 ```json
 {
-  "immich": {
+  "photo_source": {
+    "type": "immich",
     "url": "https://photos.example.com",
     "api_key": "...",
     "album_ids": ["8b0c...", "1f2e..."]
@@ -125,9 +179,14 @@ invalid file is logged and the previous settings stay in use.
   },
   "slideshow": {"interval_ms": 6000, "fade_ms": 1500},
   "cache": {"window": 25, "include_live_photos": true},
-  "panel": {"timeout_ms": 30000, "long_press_ms": 500}
+  "panel": {"timeout_ms": 30000, "long_press_ms": 500},
+  "live_photo": {"pause_ms": 3000}
 }
 ```
+
+Files from earlier versions have an `"immich"` section (the same keys,
+without `"type"`) instead of `"photo_source"`. It still works, and becomes
+`"photo_source"` the next time the frame saves the settings.
 
 Only the credentials are required; everything else has the defaults
 shown. Leave a section out to switch that service off. Picture Rail keeps
@@ -135,6 +194,31 @@ the file readable only by its owner (mode 0600).
 
 `home_assistant.ssl_verify` (default `true`) can be set to `false` for a
 self-signed certificate on an `https://` URL.
+
+### Adding a photo source
+
+A photo source is a module implementing the `PictureRail.PhotoSource`
+behaviour (`PictureRail.Immich.Source` is the example):
+
+- `type/0` is the value of `photo_source.type` that selects it, and
+  `label/0` its name on the Setup page.
+- `fields/0` declares its settings as `PictureRail.Setup.Field`s (URL,
+  text, secret, toggle, integer, seconds, or choices). The settings file
+  is validated against them, and the frame's Setup page and the web page
+  draw their forms from them, so the source needs no UI code.
+  `validate/1` adds any checks across fields.
+- `choices/2` lists the choices for a `{:choices, :multi}` field (Immich's
+  albums) and `check/1` tests a connection. Both may be slow: they run in a
+  task.
+- `child_spec/1` starts its process, which fetches and caches photos;
+  `next/1` and `stats/1` answer the slideshow and the UI without waiting
+  on the network.
+
+Then list it, with the sources you keep:
+
+```elixir
+config :picture_rail, photo_sources: [PictureRail.Immich.Source, MySource]
+```
 
 ### Immich API key
 
