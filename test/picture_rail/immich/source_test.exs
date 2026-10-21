@@ -85,6 +85,14 @@ defmodule PictureRail.Immich.SourceTest do
     assert Source.check(@config) == :ok
   end
 
+  test "an unsaved URL with a trailing slash works as the saved one would" do
+    # (serve/1 answers /api/... only: //api/... would fail)
+    serve()
+    config = %{@config | "url" => " https://photos.example.com/ "}
+    assert Source.check(config) == :ok
+    assert {:ok, [_ | _]} = Source.choices("album_ids", config)
+  end
+
   test "the source is a subtree: its download tasks stop with it" do
     registry = :"source_test_#{System.unique_integer([:positive])}"
     start_supervised!({Registry, keys: :unique, name: registry})

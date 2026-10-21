@@ -101,8 +101,12 @@ defmodule PictureRail.Immich.Source do
     options =
       :picture_rail |> Application.get_env(__MODULE__, []) |> Keyword.get(:req_options, [])
 
-    Client.new(%Settings.Immich{url: config["url"], api_key: config["api_key"]}, options)
+    Client.new(%Settings.Immich{url: url(config["url"]), api_key: config["api_key"]}, options)
   end
+
+  # As validation stores it: Test and loading albums get the unsaved one.
+  defp url(url) when is_binary(url), do: url |> String.trim() |> String.trim_trailing("/")
+  defp url(url), do: url
 
   defp describe({:error, :offline}), do: "Can't reach the server"
   defp describe({:error, :invalid_key}), do: "API key rejected"
