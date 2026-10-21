@@ -25,7 +25,8 @@ defmodule PictureRail.App.HA do
     * `:slide` - `{{entity_id, kind}, value}`, a slider under the finger:
       shown at once (`sliders`), sent at most every 250 ms
       (`PictureRail.HA.Actions.slider/3`), then held optimistically like
-      any call.
+      any call. Each move is activity for the panel (the `:activity`
+      callback): a long drag keeps it up.
 
   Exposes `%{status:, revision:, view:, slice:, states:, sliders:, names:, nav:,
   energy:, error:}`; `sliders` the values under a finger by `{entity_id,
@@ -103,7 +104,9 @@ defmodule PictureRail.App.HA do
     end
   end
 
-  def slide({key, value}, state) do
+  def slide({key, value}, state, _deps, callbacks) do
+    callbacks.activity.()
+
     unless Map.has_key?(state.sliding, key),
       do: Process.send_after(self(), {:slide_send, key}, @slide_send_ms)
 

@@ -70,7 +70,8 @@ defmodule PictureRail.App do
         dependencies: [:panel],
         callbacks: %{
           call_service: &call_service/1,
-          open: fn view -> dispatch(:panel, :open, view) end
+          open: fn view -> dispatch(:panel, :open, view) end,
+          activity: fn -> dispatch(:panel, :activity, nil) end
         }
       )
     ]
@@ -107,16 +108,25 @@ defmodule PictureRail.App do
     if Process.whereis(Pairing), do: Pairing.forget(), else: :ok
   end
 
+  @doc false
   # Nothing to show and no way to set it up from a phone: no Wi-Fi or
-  # Ethernet, and nothing in the settings.
-  defp first_boot?(configured) do
-    backend = Network.Backend.impl()
+  # Ethernet, and nothing in the settings. Not without the network (it
+  # isn't started in tests), nor if its backend can't answer.
+  @spec first_boot?(map()) :: boolean()
+  def first_boot?(configured) do
+    if Process.whereis(Network) do
+      backend = Network.Backend.impl()
 
-    Network.first_boot?(
-      backend.configured_networks?(),
-      backend.ethernet_up?(),
-      configured
-    )
+      Network.first_boot?(
+        backend.configured_networks?(),
+        backend.ethernet_up?(),
+        configured
+      )
+    else
+      false
+    end
+  catch
+    :exit, _reason -> false
   end
 
   # The source never waits on the network; if none is running, there's

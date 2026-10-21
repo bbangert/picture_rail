@@ -199,7 +199,8 @@ defmodule PictureRail.App.HATest do
         send(test, {:called, request})
         %{ref: make_ref()}
       end,
-      open: &send(test, {:opened, &1})
+      open: &send(test, {:opened, &1}),
+      activity: fn -> send(test, :activity) end
     }
   end
 
@@ -234,9 +235,14 @@ defmodule PictureRail.App.HATest do
     params: params
   } do
     key = {"light.ceiling", :brightness}
-    state = state |> then(&HA.slide({key, 30}, &1)) |> then(&HA.slide({key, 55}, &1))
     deps = panel({:entity, "light.ceiling"})
+    slide = &HA.slide({key, &1}, &2, deps, callbacks())
+    state = state |> then(&slide.(30, &1)) |> then(&slide.(55, &1))
     assert HA.expose(state, deps, params).sliders == %{key => 55}
+
+    # every move keeps the panel up
+    assert_received :activity
+    assert_received :activity
 
     # one send timer for the two moves
     assert_receive {:slide_send, ^key}, 500
