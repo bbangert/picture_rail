@@ -20,9 +20,8 @@ defmodule PictureRail.View.Keyboard do
   key (an event tuple, `key -> {pid, message}`, `nil` for nowhere), so the
   keyboard knows nothing of who handles them.
 
-  Shift is one-shot (the next letter, then off); a second tap within
-  400 ms locks it (caps lock) until it's tapped again. Shift and the
-  layer live in app state, and the keys are re-rendered with the cased
+  Shift and the layer are the `:setup` controller's state
+  (`PictureRail.Setup.Keyboard`); the keys are drawn with the cased
   letters.
 
   Labels use only characters Antonio has (it has no arrows or ⌫-style
@@ -34,34 +33,20 @@ defmodule PictureRail.View.Keyboard do
   """
   use Emerge.UI
 
+  alias PictureRail.Setup.Keyboard, as: KeyboardState
   alias PictureRail.View.Theme
 
-  @type key ::
-          {:char, String.t()}
-          | :space
-          | :backspace
-          | :left
-          | :right
-          | :shift
-          | {:layer, :letters | :symbols}
-          | :done
-          | :cancel
-          | :reveal
-  @type layer :: :letters | :symbols
-  @type shift :: :off | :once | :caps
-  @type mode :: :native | :masked
-  @type state :: %{layer: layer(), shift: shift(), shift_at: integer() | nil}
+  @type key :: KeyboardState.key()
+  @type layer :: KeyboardState.layer()
+  @type shift :: KeyboardState.shift()
+  @type state :: KeyboardState.t()
 
-  @double_tap_ms 400
+  @type mode :: :native | :masked
 
   @letters ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
   @symbols ["1234567890", ~S{-/:;()$&@"}, ".,?!'"]
   @more_symbols ["[]{}#%^*+=", "_\\|~<>€£¥•", ".,?!'`"]
   @url_row ["https://", "http://", ".", "/", ":", ".local"]
-
-  @doc "A fresh keyboard: letters, shift off."
-  @spec new() :: state()
-  def new, do: %{layer: :letters, shift: :off, shift_at: nil}
 
   # -- Layout --
 
@@ -108,42 +93,6 @@ defmodule PictureRail.View.Keyboard do
   defp char_rows(:symbols, _shift), do: @more_symbols
 
   defp chars(row), do: for(c <- String.graphemes(row), do: {{:char, c}, c, 1})
-
-  # -- State --
-
-  @doc """
-  A tap on shift at `now` (ms): off → once; once → caps when it's a
-  double tap, else off; caps → off. On the symbols layer shift flips
-  between the two symbol pages (no caps lock).
-  """
-  @spec press_shift(state(), integer()) :: state()
-  def press_shift(%{shift: :off} = kb, now), do: %{kb | shift: :once, shift_at: now}
-
-  def press_shift(%{shift: :once, layer: :letters, shift_at: at} = kb, now)
-      when is_integer(at) and now - at <= @double_tap_ms,
-      do: %{kb | shift: :caps, shift_at: now}
-
-  def press_shift(kb, now), do: %{kb | shift: :off, shift_at: now}
-
-  @doc "After a character is typed: a one-shot shift on the letters ends."
-  @spec typed(state()) :: state()
-  def typed(%{shift: :once, layer: :letters} = kb), do: %{kb | shift: :off}
-  def typed(kb), do: kb
-
-  @doc "Switch layers (shift off)."
-  @spec layer(state(), layer()) :: state()
-  def layer(kb, layer), do: %{kb | layer: layer, shift: :off, shift_at: nil}
-
-  @doc """
-  A masked field's value after a key (`:masked` mode), at most `max`
-  characters: characters and space are appended, backspace takes the last
-  one off; other keys leave it alone.
-  """
-  @spec edit(String.t(), key(), pos_integer()) :: String.t()
-  def edit(value, {:char, text}, max), do: String.slice(value <> text, 0, max)
-  def edit(value, :space, max), do: String.slice(value <> " ", 0, max)
-  def edit(value, :backspace, _max), do: String.slice(value, 0..-2//1)
-  def edit(value, _key, _max), do: value
 
   # -- Keys --
 

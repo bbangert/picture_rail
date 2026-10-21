@@ -80,8 +80,7 @@ defmodule PictureRail.App.Setup do
   require Logger
 
   alias PictureRail.Setup
-  alias PictureRail.Setup.{Field, Secret}
-  alias PictureRail.View.Keyboard
+  alias PictureRail.Setup.{Field, Keyboard, Secret}
 
   @impl Solve.Controller
   def init(_params, _dependencies), do: closed()
