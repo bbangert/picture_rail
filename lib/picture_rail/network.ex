@@ -8,8 +8,12 @@ defmodule PictureRail.Network do
     1. the same network and password as the running one, connected: done
     2. the configuration is built (bad passwords are refused at once) and
        applied, replacing the old network (one network at a time)
-    3. it's kept once it has held a connection, an IPv4 address and the
-       chosen network as its access point for 3 s: then saved
+    3. it's kept once the old connection has gone and a new one has held
+       a connection and an IPv4 address for 3 s (and, when wpa_supplicant
+       says which access point it's on, that it's the chosen network):
+       then saved. `current_ap` can't be required: when wpa_supplicant
+       connects before VintageNetWiFi is listening (at boot, seen on the
+       frame), it stays unset.
     4. a wrong password reported by wpa_supplicant (after the trial
        started), or no connection within 30 s, puts the previous
        configuration back
@@ -193,9 +197,15 @@ defmodule PictureRail.Network do
     end)
   end
 
-  defp connected?(state, ssid \\ nil) do
-    state.connection in [:lan, :internet] and ipv4(state) != nil and
-      (ssid == nil or match?(%{ssid: ^ssid}, state.current_ap))
+  defp connected?(state), do: state.connection in [:lan, :internet] and ipv4(state) != nil
+
+  # Connected, and not known to be on another network.
+  defp connected?(state, ssid) do
+    connected?(state) and
+      case state.current_ap do
+        %{ssid: current} when current not in [nil, ""] -> current == ssid
+        _ -> state.backend.configured_ssid() == ssid
+      end
   end
 
   # -- Trial --
@@ -226,6 +236,7 @@ defmodule PictureRail.Network do
           started_at: started_at,
           previous: previous,
           ok_since: nil,
+          dropped?: false,
           wrong_key?: false
         }
 
@@ -241,6 +252,14 @@ defmodule PictureRail.Network do
 
   defp check_trial(%{trial: nil} = state), do: state
   defp check_trial(%{trial: %{wrong_key?: true}} = state), do: revert(state, :wrong_password)
+
+  # The old connection has to go first (configure restarts
+  # wpa_supplicant): until then a connection is the previous network's.
+  defp check_trial(%{trial: %{dropped?: false} = trial} = state) do
+    if connected?(state),
+      do: state,
+      else: check_trial(%{state | trial: %{trial | dropped?: true}})
+  end
 
   defp check_trial(%{trial: trial} = state) do
     case {connected?(state, trial.ssid), trial.ok_since} do
@@ -317,13 +336,20 @@ defmodule PictureRail.Network do
   defp report_of(state) do
     %{
       status: if(connected?(state), do: :connected, else: :disconnected),
-      ssid: state.current_ap && Map.get(state.current_ap, :ssid),
+      ssid: ssid(state),
       ip: ipv4(state),
       networks: networks(state.access_points),
       scanning?: state.watch_until != nil,
       trial: state.trial && Map.take(state.trial, [:ssid, :started_at]),
       result: state.result
     }
+  end
+
+  defp ssid(state) do
+    case state.current_ap do
+      %{ssid: ssid} when ssid not in [nil, ""] -> ssid
+      _ -> if connected?(state), do: state.backend.configured_ssid()
+    end
   end
 
   defp now, do: System.monotonic_time(:millisecond)

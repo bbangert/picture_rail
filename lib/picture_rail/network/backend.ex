@@ -52,6 +52,9 @@ defmodule PictureRail.Network.Backend do
   @doc "Whether the running configuration already is this network and password."
   @callback running?(ssid :: String.t(), password :: String.t() | nil) :: boolean()
 
+  @doc "The name of the network the running configuration joins (`nil` for none)."
+  @callback configured_ssid() :: String.t() | nil
+
   @doc "Whether any Wi-Fi network is configured."
   @callback configured_networks?() :: boolean()
 

@@ -89,6 +89,9 @@ defmodule PictureRail.Network.Fake do
   end
 
   @impl true
+  def configured_ssid, do: Map.get(get_configuration(), :ssid)
+
+  @impl true
   def configured_networks?, do: Map.has_key?(get_configuration(), :ssid)
 
   @impl true

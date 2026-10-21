@@ -124,6 +124,30 @@ defmodule PictureRail.NetworkTest do
       assert await_result() == {:failed, :timeout, "Home"}
     end
 
+    test "without an access point from wpa_supplicant, a new connection still counts", %{net: net} do
+      # on the old network, its address, no current_ap (as on the frame)
+      Fake.send_event({:addresses, [%{family: :inet, address: {192, 168, 1, 40}}]})
+      Fake.send_event({:connection, :internet})
+      assert %{status: :connected, ssid: "Old"} = Network.status(net)
+
+      assert :ok = Network.join("Home", "goodpassword", false, net)
+      # wpa_supplicant restarts: the old link goes, the new one comes up
+      Fake.send_event({:connection, :disconnected})
+      Fake.send_event({:addresses, []})
+      Fake.send_event({:addresses, [%{family: :inet, address: {192, 168, 1, 41}}]})
+      Fake.send_event({:connection, :lan})
+
+      assert await_result() == {:connected, "Home"}
+      assert %{ssid: "Home", ip: "192.168.1.41"} = Network.status(net)
+    end
+
+    test "the old link staying up isn't a success", %{net: net} do
+      Fake.send_event({:addresses, [%{family: :inet, address: {192, 168, 1, 40}}]})
+      Fake.send_event({:connection, :internet})
+      assert :ok = Network.join("Home", "goodpassword", false, net)
+      assert await_result() == {:failed, :timeout, "Home"}
+    end
+
     test "the same network and password, connected: nothing to do", %{net: net} do
       connected("Old")
       assert :ok = Network.join("Old", "oldpassword", false, net)

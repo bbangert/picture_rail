@@ -114,6 +114,14 @@ if Code.ensure_loaded?(VintageNet) do
     end
 
     @impl true
+    def configured_ssid do
+      case networks(get_configuration()) do
+        [%{ssid: ssid} | _] -> ssid
+        _ -> nil
+      end
+    end
+
+    @impl true
     def configured_networks?, do: networks(get_configuration()) != []
 
     defp networks(config), do: get_in(config, [:vintage_net_wifi, :networks]) || []
