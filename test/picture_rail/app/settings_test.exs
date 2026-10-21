@@ -11,7 +11,7 @@ defmodule PictureRail.App.SettingsTest do
     state = Controller.loaded({settings, :ok}, Controller.init(nil, %{}))
     exposed = Controller.expose(state, %{}, nil)
 
-    assert %{loaded?: true, status: :ok, configured: %{immich: false, home_assistant: true}} =
+    assert %{loaded?: true, status: :ok, configured: %{photo_source: false, home_assistant: true}} =
              exposed
 
     refute inspect(exposed) =~ "secret"
@@ -31,6 +31,25 @@ defmodule PictureRail.App.SettingsTest do
 
     rotated = Controller.loaded({ha.("two"), :ok}, same)
     assert Controller.expose(rotated, %{}, nil).credentials_rev == rev + 1
+    refute inspect(Controller.expose(rotated, %{}, nil)) =~ "two"
+  end
+
+  test "a new photo source key bumps the revision too, and the type is exposed" do
+    immich = fn key ->
+      {:ok, s} =
+        Settings.parse(%{
+          "photo_source" => %{"type" => "immich", "url" => "http://immich", "api_key" => key}
+        })
+
+      s
+    end
+
+    state = Controller.loaded({immich.("one"), :ok}, {Settings.defaults(), :missing, 0})
+    exposed = Controller.expose(state, %{}, nil)
+    assert %{photo_source_type: "immich", configured: %{photo_source: true}} = exposed
+
+    rotated = Controller.loaded({immich.("two"), :ok}, state)
+    assert Controller.expose(rotated, %{}, nil).credentials_rev == exposed.credentials_rev + 1
     refute inspect(Controller.expose(rotated, %{}, nil)) =~ "two"
   end
 

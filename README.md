@@ -106,15 +106,16 @@ ssh -i .ssh/picture_rail_ed25519 -s <device-ip> fwup < _build/frame156_dev/nerve
 ## Settings
 
 Settings live in a JSON file in the data directory: `/root/picture_rail.json`
-on the device (`tmp/data/picture_rail.json` on the host). On first boot
-Picture Rail writes a template there to fill in. Edit it over SSH; Picture Rail
-notices changes within ten seconds, or run `PictureRail.Settings.reload()`
-in the device's IEx shell to see any validation errors straight away. An
-invalid file is logged and the previous settings stay in use.
+on the device (`tmp/data/picture_rail.json` on the host). There's none until
+something is set up. You can also edit it over SSH; Picture Rail notices
+changes within ten seconds, or run `PictureRail.Settings.reload()` in the
+device's IEx shell to see any validation errors straight away. An invalid
+file is logged and the previous settings stay in use.
 
 ```json
 {
-  "immich": {
+  "photo_source": {
+    "type": "immich",
     "url": "https://photos.example.com",
     "api_key": "...",
     "album_ids": ["8b0c...", "1f2e..."]
@@ -125,9 +126,14 @@ invalid file is logged and the previous settings stay in use.
   },
   "slideshow": {"interval_ms": 6000, "fade_ms": 1500},
   "cache": {"window": 25, "include_live_photos": true},
-  "panel": {"timeout_ms": 30000, "long_press_ms": 500}
+  "panel": {"timeout_ms": 30000, "long_press_ms": 500},
+  "live_photo": {"pause_ms": 3000}
 }
 ```
+
+Files from earlier versions have an `"immich"` section (the same keys,
+without `"type"`) instead of `"photo_source"`. It still works, and becomes
+`"photo_source"` the next time the frame saves the settings.
 
 Only the credentials are required; everything else has the defaults
 shown. Leave a section out to switch that service off. Picture Rail keeps

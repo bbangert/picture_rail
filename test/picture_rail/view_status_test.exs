@@ -3,14 +3,14 @@ defmodule PictureRail.View.StatusTest do
 
   alias PictureRail.View.Status
 
-  @configured %{status: :ok, configured: %{immich: true, home_assistant: true}}
+  @configured %{status: :ok, configured: %{photo_source: true, home_assistant: true}}
 
   test "settings problems come first" do
     assert Status.message(%{status: :template}, nil) == "Set up picture_rail.json"
     assert Status.message(%{status: {:error, ["x"]}}, nil) == "picture_rail.json has errors"
 
-    assert Status.message(%{status: :ok, configured: %{immich: false}}, nil) ==
-             "Immich isn't set up"
+    assert Status.message(%{status: :ok, configured: %{photo_source: false}}, nil) ==
+             "Photos aren't set up"
   end
 
   test "then the cache's status" do
