@@ -385,6 +385,27 @@ defmodule PictureRail.Immich.CacheTest do
     refute "p2" in ids
   end
 
+  test "a photo that can't be downloaded doesn't hold up the next passes", %{tmp_dir: dir} do
+    agent =
+      Fake.start(Enum.map(1..4, &asset/1),
+        formats: %{"p2" => {:error, {:unsupported_format, "image/webp"}}}
+      )
+
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    wait_ready(1)
+
+    # three passes over the three good photos, each one downloaded anew
+    ids =
+      for _ <- 1..9 do
+        {:ok, entry} = Cache.next(cache)
+        wait_ready(1)
+        entry.asset.id
+      end
+
+    assert ids |> Enum.frequencies() |> Map.values() |> Enum.sort() == [3, 3, 3]
+    refute "p2" in ids
+  end
+
   test "a download that times out doesn't make the cache go offline", %{tmp_dir: dir} do
     agent = Fake.start(Enum.map(1..3, &asset/1), formats: %{"p2" => {:error, :offline}})
     {_pid, cache} = start_cache(agent, dir)
