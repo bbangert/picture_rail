@@ -168,6 +168,8 @@ defmodule PictureRail.HA.ActionsTest do
     assert %{data: %{is_volume_muted: false}} = Actions.toggle_mute(tv)
     assert %{data: %{shuffle: true}} = Actions.toggle_shuffle(tv)
     assert %{data: %{repeat: "one"}} = Actions.cycle_repeat(tv)
-    assert %{service: "turn_on", optimistic: "on"} = Actions.power("media_player.tv", true)
+    # on reports idle/playing/paused, off off/standby: nothing to hold
+    assert Actions.power("media_player.tv", true) ==
+             %{domain: "media_player", service: "turn_on", entity_id: "media_player.tv"}
   end
 end

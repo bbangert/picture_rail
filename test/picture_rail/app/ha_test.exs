@@ -3,7 +3,7 @@ defmodule PictureRail.App.HATest do
 
   alias Hassock.EntityState
   alias PictureRail.App.HA
-  alias PictureRail.HA.Overview
+  alias PictureRail.HA.{Actions, Overview}
   alias PictureRail.HAFixture
 
   # The source reads entity states from the test process, so a test can
@@ -302,6 +302,26 @@ defmodule PictureRail.App.HATest do
     )
 
     assert_received {:called, %{data: %{hs_color: [200, 20]}}}
+  end
+
+  test "a colour settles around the hue circle", %{state: state, params: params} do
+    deps = panel({:entity, "light.ceiling"})
+    callbacks = %{call_service: fn _ -> %{ref: make_ref()} end}
+
+    for {sent, reported} <- [{360, 0.0}, {359, 1.0}, {2, 358.5}] do
+      state = HA.start_call(Actions.color("light.ceiling", [sent, 80]), state, callbacks)
+
+      report("light.ceiling", fn es ->
+        %{es | state: "on", attributes: Map.put(es.attributes, "hs_color", [reported, 80.0])}
+      end)
+
+      assert HA.states(["light.ceiling"], state, deps, %{}, params).pending == %{}
+    end
+
+    # a different colour doesn't
+    state = HA.start_call(Actions.color("light.ceiling", [180, 80]), state, callbacks)
+    report("light.ceiling", &%{&1 | attributes: Map.put(&1.attributes, "hs_color", [10.0, 80.0])})
+    refute HA.states(["light.ceiling"], state, deps, %{}, params).pending == %{}
   end
 
   test "a setpoint settles only when HA reports it exactly", %{state: state, params: params} do

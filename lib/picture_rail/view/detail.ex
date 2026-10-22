@@ -261,12 +261,17 @@ defmodule PictureRail.View.Detail do
   defp transport(ctx, es) do
     attrs = es.attributes
     media = &call(ctx, Actions.media(ctx.id, &1))
-    play = if es.state == "playing", do: "Pause", else: "Play"
     repeat = attrs["repeat"] || "off"
+
+    # playing: Pause, if it can; otherwise: Play, if it can
+    {play, play_feature, play_service} =
+      if es.state == "playing",
+        do: {"Pause", :pause, "media_pause"},
+        else: {"Play", :play, "media_play"}
 
     [
       {[:previous_track], fn -> button(ctx, "‹‹", media.("media_previous_track"), false) end},
-      {[:pause, :play], fn -> button(ctx, play, media.("media_play_pause"), true) end},
+      {[play_feature], fn -> button(ctx, play, media.(play_service), true) end},
       {[:stop], fn -> button(ctx, "Stop", media.("media_stop"), false) end},
       {[:next_track], fn -> button(ctx, "››", media.("media_next_track"), false) end},
       {[:shuffle_set],

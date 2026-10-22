@@ -249,9 +249,15 @@ defmodule PictureRail.App.HA do
     do: abs(a - b) <= max(1.5, abs(b) * 0.02)
 
   defp close?("hs_color", [h, s], [wanted_h, wanted_s]) when is_number(h) and is_number(s),
-    do: abs(h - wanted_h) <= 4 and abs(s - wanted_s) <= 4
+    do: hue_distance(h, wanted_h) <= 4 and abs(s - wanted_s) <= 4
 
   defp close?(_key, a, b), do: a == b
+
+  # around the circle: 359 and 1 are 2 apart, 360 and 0 the same red
+  defp hue_distance(a, b) do
+    d = :math.fmod(abs(a - b), 360)
+    min(d, 360 - d)
+  end
 
   defp with_pending(es, nil), do: es
   defp with_pending(nil, _pending), do: nil

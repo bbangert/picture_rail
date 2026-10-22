@@ -130,6 +130,23 @@ defmodule PictureRail.View.DetailTest do
     refute text =~ "\"ON\""
   end
 
+  test "play and pause only as the player supports them" do
+    only_play = es("media_player.a", "playing", %{"supported_features" => 16_384})
+    text = only_play |> blocks() |> shown()
+    refute text =~ "\"PAUSE\""
+    refute text =~ "\"PLAY\""
+
+    text = only_play |> Map.put(:state, "paused") |> blocks() |> shown()
+    assert text =~ "\"PLAY\""
+
+    only_pause = es("media_player.b", "idle", %{"supported_features" => 1})
+    text = only_pause |> blocks() |> shown()
+    refute text =~ "\"PLAY\""
+
+    text = only_pause |> Map.put(:state, "playing") |> blocks() |> shown()
+    assert text =~ "\"PAUSE\""
+  end
+
   test "a colour light: colour sliders, swatches and effects" do
     hue =
       es("light.signe", "on", %{

@@ -302,10 +302,14 @@ defmodule PictureRail.HA.Actions do
   @spec media(String.t(), String.t()) :: map()
   def media(id, service), do: %{domain: "media_player", service: service, entity_id: id}
 
-  @doc "Turn a media player on or off."
+  @doc """
+  Turn a media player on or off. Not optimistic: one that's on reports
+  `idle`, `playing` or `paused`, one that's off `off` or `standby`, so no
+  one state could stand in for it.
+  """
   @spec power(String.t(), boolean()) :: map()
-  def power(id, true), do: id |> media("turn_on") |> Map.put(:optimistic, "on")
-  def power(id, false), do: id |> media("turn_off") |> Map.put(:optimistic, "off")
+  def power(id, true), do: media(id, "turn_on")
+  def power(id, false), do: media(id, "turn_off")
 
   @doc "Mute a media player if it isn't muted, unmute it if it is."
   @spec toggle_mute(Hassock.EntityState.t()) :: map()
