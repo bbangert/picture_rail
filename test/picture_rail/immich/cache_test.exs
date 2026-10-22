@@ -97,7 +97,13 @@ defmodule PictureRail.Immich.CacheTest do
 
     @impl true
     def download_preview(agent, id, path) do
+      case Agent.get(agent, &Map.get(&1, :download_gate)) do
+        nil -> :ok
+        gate -> wait(gate)
+      end
+
       result = call(agent, :download, fn s -> Map.get(s.formats, id, :ok) end)
+      if result == :raise, do: raise("download blew up")
       if result == :ok, do: File.write!(path, <<0xFF, 0xD8, 0xFF, "photo ", id::binary>>)
       result
     end
@@ -156,6 +162,14 @@ defmodule PictureRail.Immich.CacheTest do
   end
 
   defp wait_ready(n), do: await_stats(&(&1.ready >= n and not &1.downloading?))
+
+  defp poll(fun, tries \\ 100) do
+    cond do
+      fun.() -> true
+      tries == 0 -> false
+      true -> Process.sleep(20) && poll(fun, tries - 1)
+    end
+  end
 
   defp jpgs(dir), do: dir |> Path.join("*.jpg") |> Path.wildcard() |> length()
 
@@ -266,6 +280,143 @@ defmodule PictureRail.Immich.CacheTest do
     assert File.exists?(path)
   end
 
+  # ids of the photos on disk, and of those the pass has taken (seen.log)
+  defp on_disk(dir),
+    do:
+      dir
+      |> Path.join("*.jpg")
+      |> Path.wildcard()
+      |> MapSet.new(&(&1 |> Path.basename() |> String.split("-") |> hd()))
+
+  defp seen(dir) do
+    dir
+    |> Path.join("seen.log")
+    |> File.read!()
+    |> String.split("\n", trim: true)
+    |> MapSet.new(&(&1 |> String.split("\t") |> hd()))
+  end
+
+  test "a restart carries on with the photos the pass hasn't shown", %{tmp_dir: dir} do
+    agent = Fake.start(Enum.map(1..8, &asset/1))
+    {_pid, cache} = start_cache(agent, dir, window: 2)
+    wait_ready(2)
+
+    for _ <- 1..2 do
+      {:ok, _} = Cache.next(cache)
+      wait_ready(2)
+    end
+
+    taken = seen(dir)
+    assert MapSet.size(taken) == 4
+    stop_supervised!(cache)
+
+    {_pid, cache} = start_cache(agent, dir, window: 2)
+    await_stats(&(&1.status == :online))
+
+    # every photo downloaded from here is one the pass hadn't taken
+    downloaded =
+      Enum.reduce(1..3, MapSet.new(), fn _, downloaded ->
+        before = on_disk(dir)
+        {:ok, _} = Cache.next(cache)
+        wait_ready(2)
+        MapSet.union(downloaded, MapSet.difference(on_disk(dir), before))
+      end)
+
+    assert MapSet.size(downloaded) > 0
+    assert MapSet.disjoint?(downloaded, taken)
+  end
+
+  test "a pass left with only a photo already on disk starts the next one", %{tmp_dir: dir} do
+    agent = Fake.start(Enum.map(1..3, &asset/1))
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    wait_ready(1)
+    [on_disk] = dir |> on_disk() |> MapSet.to_list()
+    stop_supervised!(cache)
+
+    # after restarts, the pass has seen the other two; the one on disk is all that's left
+    others = for n <- 1..3, "p#{n}" != on_disk, do: ["p#{n}", ?\t, Base.encode64("sum#{n}"), ?\n]
+    File.write!(Path.join(dir, "seen.log"), others)
+
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    await_stats(&(&1.status == :online))
+    assert {:ok, %{asset: %{id: ^on_disk}}} = Cache.next(cache)
+
+    # a new pass begins, so the window refills with another photo (polled:
+    # stats messages from before the restart may still be waiting)
+    assert poll(fn -> Cache.stats(cache).ready == 1 end)
+    assert {:ok, %{asset: %{id: next}}} = Cache.next(cache)
+    refute next == on_disk
+  end
+
+  test "a photo whose download a restart cut short stays in the pass", %{tmp_dir: dir} do
+    agent = Fake.start(Enum.map(1..3, &asset/1))
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    wait_ready(1)
+
+    gate = Fake.gate()
+    Fake.set(agent, &Map.put(&1, :download_gate, gate))
+    {:ok, %{asset: %{id: first}}} = Cache.next(cache)
+    assert_receive :gate_waiting, 1_000
+
+    # the download in flight isn't seen yet
+    assert seen(dir) == MapSet.new([first])
+    stop_supervised!(cache)
+    Fake.set(agent, &Map.delete(&1, :download_gate))
+
+    # after the restart, the two photos not shown yet come before any repeat
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    await_stats(&(&1.status == :online))
+    assert {:ok, %{asset: %{id: ^first}}} = Cache.next(cache)
+
+    rest =
+      for _ <- 1..2 do
+        assert poll(fn -> Cache.stats(cache).ready == 1 end)
+        {:ok, %{asset: %{id: id}}} = Cache.next(cache)
+        id
+      end
+
+    assert Enum.sort(rest) == ["p1", "p2", "p3"] -- [first]
+  end
+
+  test "a photo removed from the albums leaves the log; the rest stays", %{tmp_dir: dir} do
+    agent = Fake.start(Enum.map(1..6, &asset/1))
+    {_pid, cache} = start_cache(agent, dir, window: 2, album_poll_ms: 20)
+    wait_ready(2)
+    {:ok, _} = Cache.next(cache)
+    wait_ready(2)
+
+    logged = seen(dir)
+    assert MapSet.size(logged) == 3
+    [gone | kept] = Enum.sort(logged)
+
+    Fake.set(agent, fn s ->
+      assets = Enum.reject(s.assets, &(&1.id == gone))
+      %{s | assets: assets, album: %{s.album | asset_count: 5, updated_at: "t1"}}
+    end)
+
+    await_stats(&(&1.photos == 5))
+    assert poll(fn -> not MapSet.member?(seen(dir), gone) end)
+    # the pass hasn't rolled over: the other photos it took are still logged
+    assert MapSet.subset?(MapSet.new(kept), seen(dir))
+  end
+
+  test "a pass shows every photo, then a new one starts", %{tmp_dir: dir} do
+    agent = Fake.start(Enum.map(1..4, &asset/1))
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    wait_ready(1)
+
+    shown =
+      for _ <- 1..4 do
+        {:ok, entry} = Cache.next(cache)
+        wait_ready(1)
+        entry.asset.id
+      end
+
+    assert Enum.sort(shown) == ["p1", "p2", "p3", "p4"]
+    # the next pass has begun: the log holds only its photos
+    assert MapSet.size(seen(dir)) < 4
+  end
+
   test "albums are re-listed only when they change; removed photos go", %{tmp_dir: dir} do
     agent = Fake.start(Enum.map(1..3, &asset/1))
     test = self()
@@ -282,6 +433,8 @@ defmodule PictureRail.Immich.CacheTest do
     await_stats(&(&1.photos == 2))
     assert Fake.calls(agent, :list_images) == 2
     assert jpgs(dir) == 2
+    # a photo that's gone isn't remembered as seen
+    refute MapSet.member?(seen(dir), "p3")
   end
 
   test "a photo removed from the album while on screen doesn't come round again",
@@ -320,6 +473,27 @@ defmodule PictureRail.Immich.CacheTest do
     refute "p2" in ids
   end
 
+  test "a photo that can't be downloaded doesn't hold up the next passes", %{tmp_dir: dir} do
+    agent =
+      Fake.start(Enum.map(1..4, &asset/1),
+        formats: %{"p2" => {:error, {:unsupported_format, "image/webp"}}}
+      )
+
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    wait_ready(1)
+
+    # three passes over the three good photos, each one downloaded anew
+    ids =
+      for _ <- 1..9 do
+        {:ok, entry} = Cache.next(cache)
+        wait_ready(1)
+        entry.asset.id
+      end
+
+    assert ids |> Enum.frequencies() |> Map.values() |> Enum.sort() == [3, 3, 3]
+    refute "p2" in ids
+  end
+
   test "a download that times out doesn't make the cache go offline", %{tmp_dir: dir} do
     agent = Fake.start(Enum.map(1..3, &asset/1), formats: %{"p2" => {:error, :offline}})
     {_pid, cache} = start_cache(agent, dir)
@@ -327,6 +501,45 @@ defmodule PictureRail.Immich.CacheTest do
     await_stats(&(&1.ready >= 2))
     assert Cache.stats(cache).status == :online
     refute_received {:stats, %{status: :offline}}
+  end
+
+  test "a photo that keeps timing out doesn't stop the next passes", %{tmp_dir: dir} do
+    keeps_failing(dir, {:error, :offline})
+  end
+
+  @tag :capture_log
+  test "a photo whose download keeps crashing doesn't stop the next passes", %{tmp_dir: dir} do
+    keeps_failing(dir, :raise)
+  end
+
+  # p2's download always fails as `failure`: the good photos still cycle,
+  # pass after pass, and p2 is shown once its download works.
+  defp keeps_failing(dir, failure) do
+    agent = Fake.start(Enum.map(1..4, &asset/1), formats: %{"p2" => failure})
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    wait_ready(1)
+
+    # three passes over the good photos, each downloaded anew
+    ids =
+      for _ <- 1..9 do
+        assert poll(fn -> Cache.stats(cache).ready == 1 end)
+        {:ok, %{asset: %{id: id}}} = Cache.next(cache)
+        id
+      end
+
+    assert ids |> Enum.frequencies() |> Map.values() |> Enum.sort() == [3, 3, 3]
+
+    # and each pass tries it again: once it downloads, it's shown
+    Fake.set(agent, &%{&1 | formats: %{}})
+
+    ids =
+      for _ <- 1..8 do
+        assert poll(fn -> Cache.stats(cache).ready == 1 end)
+        {:ok, %{asset: %{id: id}}} = Cache.next(cache)
+        id
+      end
+
+    assert "p2" in ids
   end
 
   test "an exception from the Immich side counts as offline, not a crash", %{tmp_dir: dir} do

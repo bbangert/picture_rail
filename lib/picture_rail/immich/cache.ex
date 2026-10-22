@@ -7,6 +7,15 @@ defmodule PictureRail.Immich.Cache do
   photo cache directory, one download at a time. `next/1` hands out the
   next downloaded photo without ever waiting on the network.
 
+  A pass shows every photo once before any comes round again. The photos
+  it has downloaded are remembered in `seen.log` next to the manifest (a
+  line appended per photo, once its download is in the manifest), so a
+  restart, or the albums changing, carries on with the photos the pass
+  hasn't shown yet instead of starting over; the log is cleared when a
+  new pass starts. A download cut short by a restart leaves its photo in
+  the pass; one that fails (a timeout) counts as tried for the rest of
+  this pass only, so the next pass tries it again.
+
   When new photos can be fetched, a photo that has been shown is deleted
   and the window refills. When they can't (Immich unreachable, or the
   albums fit in the window), shown photos go back to the end of the window
@@ -98,6 +107,10 @@ defmodule PictureRail.Immich.Cache do
       # every photo, and what's left of the current pass in shuffled order
       index: [],
       pass: [],
+      # keys of the photos the current pass has taken (`seen.log`), and of
+      # those whose download failed in it (tried again in the next pass)
+      seen: MapSet.new(),
+      failed: MapSet.new(),
       ready: :queue.new(),
       current: nil,
       download: nil,
@@ -164,9 +177,12 @@ defmodule PictureRail.Immich.Cache do
     {:noreply, download_done(result, asset, gen, %{state | download: nil})}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %{download: {ref, asset, _gen}} = state) do
+  # A crashed download counts as a failed one (tried again next pass).
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{download: {ref, asset, gen}} = state) do
     Logger.warning("Immich cache: download of #{asset.id} crashed: #{inspect(reason)}")
-    {:noreply, %{state | download: nil} |> maybe_download()}
+    state = %{state | download: nil}
+    state = if gen == state.gen, do: tried(state, asset), else: state
+    {:noreply, maybe_download(state)}
   end
 
   # The settings controller changed: re-read them (with credentials).
@@ -289,6 +305,7 @@ defmodule PictureRail.Immich.Cache do
     Logger.info("Immich cache: #{length(assets)} photos in #{length(album_ids)} album(s)")
 
     %{state | index: assets, album_ids: album_ids, album_versions: versions, pass: []}
+    |> forget_removed()
     |> drop_removed()
     |> set_status(:online)
     |> maybe_download()
@@ -429,22 +446,62 @@ defmodule PictureRail.Immich.Cache do
     end
   end
 
-  # The next photo of the current pass that isn't on disk; a new shuffled
-  # pass starts when this one runs out.
-  defp next_to_download(state, reshuffled? \\ false) do
+  # The next photo of the current pass that isn't on disk; the pass is
+  # (re)built when it runs out.
+  defp next_to_download(state, rebuilt? \\ false) do
     case Enum.split_while(
            state.pass,
-           &(on_disk?(state, &1) or MapSet.member?(state.bad, key(&1)))
+           &(on_disk?(state, &1) or bad?(state, &1))
          ) do
       {_skipped, [asset | rest]} ->
         {asset, %{state | pass: rest}}
 
-      {_skipped, []} when reshuffled? ->
+      {_skipped, []} when rebuilt? ->
         {nil, %{state | pass: []}}
 
       {_skipped, []} ->
-        next_to_download(%{state | pass: Enum.shuffle(state.index)}, true)
+        next_to_download(build_pass(state), true)
     end
+  end
+
+  # The rest of the current pass: the photos it hasn't seen, shuffled. When
+  # it has seen them all, a new pass starts with every photo. Photos it
+  # can't download don't count (they're never seen), nor do those that
+  # failed in this pass, nor those already on disk: they're shown anyway,
+  # and a pass left with only those would never download again.
+  defp build_pass(%{index: []} = state), do: state
+
+  defp build_pass(state) do
+    case Enum.reject(state.index, &left_out?(state, &1)) do
+      [] ->
+        %{state | pass: Enum.shuffle(state.index), failed: MapSet.new()}
+        |> write_seen(MapSet.new())
+
+      unseen ->
+        %{state | pass: Enum.shuffle(unseen)}
+    end
+  end
+
+  defp left_out?(state, asset) do
+    k = key(asset)
+
+    MapSet.member?(state.seen, k) or MapSet.member?(state.bad, k) or
+      MapSet.member?(state.failed, k) or on_disk?(state, asset)
+  end
+
+  defp bad?(state, asset), do: MapSet.member?(state.bad, key(asset))
+
+  # A photo the pass has downloaded: remembered, across restarts too.
+  defp see(state, asset) do
+    File.write(seen_path(state), seen_line(asset), [:append])
+    %{state | seen: MapSet.put(state.seen, key(asset))}
+  end
+
+  # Photos that left the albums no longer count as seen.
+  defp forget_removed(state) do
+    keys = MapSet.new(state.index, &key/1)
+    seen = MapSet.filter(state.seen, &MapSet.member?(keys, &1))
+    if seen == state.seen, do: state, else: write_seen(state, seen)
   end
 
   defp start_download(state, asset) do
@@ -510,6 +567,7 @@ defmodule PictureRail.Immich.Cache do
 
     %{state | ready: :queue.in(entry, state.ready)}
     |> write_manifest()
+    |> see(entry.asset)
     |> maybe_download()
     |> report()
   end
@@ -529,10 +587,13 @@ defmodule PictureRail.Immich.Cache do
   # failed ping counts as offline.
   defp download_done({:error, :offline}, asset, state) do
     Logger.warning("Immich cache: download of #{asset.id} failed, checking the server")
-    schedule(state, :connect, 1_000)
+    state |> tried(asset) |> schedule(:connect, 1_000)
   end
 
-  defp download_done({:error, reason}, _asset, state), do: failed(state, reason)
+  defp download_done({:error, reason}, asset, state), do: state |> tried(asset) |> failed(reason)
+
+  # A failed download: left for the next pass (this one can still finish).
+  defp tried(state, asset), do: %{state | failed: MapSet.put(state.failed, key(asset))}
 
   # -- Files and the manifest --
 
@@ -551,6 +612,29 @@ defmodule PictureRail.Immich.Cache do
   defp photo_path(state, asset), do: Path.join(state.dir, file_stem(asset) <> ".jpg")
   defp clip_path(state, asset), do: Path.join(state.dir, file_stem(asset) <> ".mp4")
   defp manifest_path(state), do: Path.join(state.dir, "manifest.json")
+  defp seen_path(state), do: Path.join(state.dir, "seen.log")
+
+  defp seen_line(%Asset{id: id, checksum: checksum}), do: [id, ?\t, checksum, ?\n]
+
+  defp write_seen(state, seen) do
+    lines = Enum.map(seen, fn {id, checksum} -> [id, ?\t, checksum, ?\n] end)
+    tmp = seen_path(state) <> ".part"
+    with :ok <- File.write(tmp, lines), do: File.rename(tmp, seen_path(state))
+    %{state | seen: seen}
+  end
+
+  defp read_seen(state) do
+    case File.read(seen_path(state)) do
+      {:ok, text} ->
+        for line <- String.split(text, "\n", trim: true),
+            [id, checksum] <- [String.split(line, "\t")],
+            into: MapSet.new(),
+            do: {id, checksum}
+
+      {:error, _} ->
+        MapSet.new()
+    end
+  end
 
   defp delete_entry(entry) do
     File.rm(entry.path)
@@ -581,14 +665,14 @@ defmodule PictureRail.Immich.Cache do
         _ -> []
       end
 
-    keep = MapSet.new(["manifest.json" | Enum.flat_map(entries, &entry_files/1)])
+    keep = MapSet.new(["manifest.json", "seen.log" | Enum.flat_map(entries, &entry_files/1)])
 
     for file <- File.ls!(state.dir),
         not MapSet.member?(keep, file),
         do: File.rm_rf(Path.join(state.dir, file))
 
     if entries != [], do: Logger.info("Immich cache: #{length(entries)} photos on disk")
-    %{state | ready: :queue.from_list(entries)} |> write_manifest()
+    %{state | ready: :queue.from_list(entries), seen: read_seen(state)} |> write_manifest()
   end
 
   defp entry_files(entry),
