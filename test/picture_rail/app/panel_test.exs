@@ -8,7 +8,7 @@ defmodule PictureRail.App.PanelTest do
   defp exposed(state), do: Panel.expose(state, @deps, nil)
 
   test "a tap shows the panel on the overview, and it hides after the timeout" do
-    state = Panel.show(nil, Panel.init(nil, @deps), @deps)
+    state = Panel.show(nil, Panel.init(nil, @deps), @deps, %{})
     assert exposed(state) == %{visible?: true, view: :overview, depth: 0, page: 0, nav_page: 0}
 
     assert_receive {:timeout, token}
@@ -17,7 +17,7 @@ defmodule PictureRail.App.PanelTest do
   end
 
   test "activity restarts the timeout; the earlier timer is ignored" do
-    state = Panel.show(nil, Panel.init(nil, @deps), @deps)
+    state = Panel.show(nil, Panel.init(nil, @deps), @deps, %{})
     assert_receive {:timeout, first}
     state = Panel.activity(nil, state, @deps)
     assert_receive {:timeout, second}
@@ -27,21 +27,21 @@ defmodule PictureRail.App.PanelTest do
   end
 
   test "views stack and unwind, and the panel reopens on the overview" do
-    state = Panel.show(nil, Panel.init(nil, @deps), @deps)
+    state = Panel.show(nil, Panel.init(nil, @deps), @deps, %{})
     state = Panel.open({:area, "kitchen"}, state, @deps, %{})
     state = Panel.open({:entity, "light.kitchen"}, state, @deps, %{})
     assert %{view: {:entity, "light.kitchen"}, depth: 2} = exposed(state)
 
-    state = Panel.back(nil, state, @deps)
+    state = Panel.back(nil, state, @deps, %{})
     assert %{view: {:area, "kitchen"}, depth: 1} = exposed(state)
 
-    state = Panel.hide(nil, state)
-    state = Panel.show(nil, state, @deps)
+    state = Panel.hide(nil, state, @deps, %{})
+    state = Panel.show(nil, state, @deps, %{})
     assert %{view: :overview, depth: 0} = exposed(state)
   end
 
   test "pages belong to their view: back returns to the page left; hiding resets them" do
-    state = Panel.show(nil, Panel.init(nil, @deps), @deps)
+    state = Panel.show(nil, Panel.init(nil, @deps), @deps, %{})
     state = Panel.page(2, state, @deps)
     state = Panel.nav_page(1, state, @deps)
     state = Panel.open({:area, "kitchen"}, state, @deps, %{})
@@ -49,12 +49,14 @@ defmodule PictureRail.App.PanelTest do
 
     state = Panel.page(1, state, @deps)
     state = Panel.open({:device, "d"}, state, @deps, %{})
-    state = Panel.back(nil, state, @deps)
+    state = Panel.back(nil, state, @deps, %{})
     assert %{view: {:area, "kitchen"}, page: 1} = exposed(state)
-    assert %{view: :overview, page: 2} = exposed(Panel.back(nil, state, @deps))
+    assert %{view: :overview, page: 2} = exposed(Panel.back(nil, state, @deps, %{}))
 
     # the idle timeout (the current timer's) brings it back fresh
-    state = state |> then(&Panel.timed_out(&1.token, &1)) |> then(&Panel.show(nil, &1, @deps))
+    state =
+      state |> then(&Panel.timed_out(&1.token, &1)) |> then(&Panel.show(nil, &1, @deps, %{}))
+
     assert %{view: :overview, page: 0, nav_page: 0} = exposed(state)
   end
 
@@ -69,16 +71,36 @@ defmodule PictureRail.App.PanelTest do
     state = Panel.open({:setup, :wifi}, state, @deps, %{})
     state = Panel.replace({:setup, :photo_source}, state, @deps, %{})
     assert %{view: {:setup, :photo_source}, depth: 2} = exposed(state)
-    assert %{view: :setup, depth: 1} = exposed(Panel.back(nil, state, @deps))
+    assert %{view: :setup, depth: 1} = exposed(Panel.back(nil, state, @deps, %{}))
 
     # first boot: Wi-Fi alone, then Next: Back goes to the overview
     first = Panel.goto({:setup, :wifi}, Panel.init(nil, @deps), @deps, %{})
     first = Panel.replace({:setup, :photo_source}, first, @deps, %{})
-    assert %{view: :overview} = exposed(Panel.back(nil, first, @deps))
+    assert %{view: :overview} = exposed(Panel.back(nil, first, @deps, %{}))
 
     # nothing open: it's an open
     assert %{view: {:setup, :wifi}, depth: 1} =
              exposed(Panel.replace({:setup, :wifi}, Panel.init(nil, @deps), @deps, %{}))
+  end
+
+  test "the view on screen goes to the :viewing callback; nil when the panel is down" do
+    test = self()
+    callbacks = %{viewing: &send(test, {:viewing, &1})}
+
+    state = Panel.show(nil, Panel.init(nil, @deps), @deps, callbacks)
+    assert_received {:viewing, :overview}
+    state = Panel.open({:entity, "camera.door"}, state, @deps, callbacks)
+    assert_received {:viewing, {:entity, "camera.door"}}
+    state = Panel.back(nil, state, @deps, callbacks)
+    assert_received {:viewing, :overview}
+    state = Panel.goto({:area, "kitchen"}, state, @deps, callbacks)
+    assert_received {:viewing, {:area, "kitchen"}}
+
+    Panel.hide(nil, state, @deps, callbacks)
+    assert_received {:viewing, nil}
+
+    Panel.handle_info({:timeout, state.token}, state, @deps, callbacks)
+    assert_received {:viewing, nil}
   end
 
   test "opening a Setup section opens its editor, however it's reached" do

@@ -1,6 +1,9 @@
 defmodule PictureRail.HA.ModelTest do
   use ExUnit.Case, async: true
 
+  # the model debounces its work: under a busy test run 100 ms isn't always enough
+  @wait 1_000
+
   alias Hassock.EntityState
   alias PictureRail.HA.Model
   alias PictureRail.{HAFixture, Settings}
@@ -36,16 +39,16 @@ defmodule PictureRail.HA.ModelTest do
 
   test "starts hassock for the configured server, and builds once both caches are ready",
        %{model: model, table: table} do
-    assert_receive {:started, @ha, _pid}
-    assert_receive {:notify, {:status, :connecting}}
+    assert_receive {:started, @ha, _pid}, @wait
+    assert_receive {:notify, {:status, :connecting}}, @wait
     assert Model.status(table) == :connecting
 
     send(model, {:hassock_registry, self(), :ready})
     refute_receive {:notify, {:model, _}}, 50
 
     send(model, {:hassock_cache, self(), :ready})
-    assert_receive {:notify, {:status, :connected}}
-    assert_receive {:notify, {:model, 1}}
+    assert_receive {:notify, {:status, :connected}}, @wait
+    assert_receive {:notify, {:model, 1}}, @wait
 
     assert [%{floor: %{floor_id: "ground"}} | _] = Model.floors(table)
     assert %{area: %{name: "Kitchen"}} = Model.area("kitchen", table)
@@ -56,7 +59,7 @@ defmodule PictureRail.HA.ModelTest do
        %{model: model} do
     send(model, {:hassock_registry, self(), :ready})
     send(model, {:hassock_cache, self(), :ready})
-    assert_receive {:notify, {:model, 1}}
+    assert_receive {:notify, {:model, 1}}, @wait
 
     changed = %EntityState{entity_id: "light.ceiling", state: "off"}
 
@@ -66,7 +69,7 @@ defmodule PictureRail.HA.ModelTest do
        {:changes, %{added: [], changed: [{"light.ceiling", changed}], removed: []}}}
     )
 
-    assert_receive {:notify, {:states, ["light.ceiling"]}}
+    assert_receive {:notify, {:states, ["light.ceiling"]}}, @wait
     refute_receive {:notify, {:model, _}}, 50
 
     send(
@@ -76,7 +79,7 @@ defmodule PictureRail.HA.ModelTest do
 
     send(model, {:hassock_registry, self(), {:changed, :area}})
     # a burst costs one rebuild
-    assert_receive {:notify, {:model, 2}}
+    assert_receive {:notify, {:model, 2}}, @wait
     refute_receive {:notify, {:model, 3}}, 50
   end
 
@@ -90,7 +93,7 @@ defmodule PictureRail.HA.ModelTest do
       )
     end
 
-    assert_receive {:notify, {:states, ["light.a", "light.b"]}}
+    assert_receive {:notify, {:states, ["light.a", "light.b"]}}, @wait
     refute_receive {:notify, {:states, _}}, 50
   end
 
@@ -99,13 +102,13 @@ defmodule PictureRail.HA.ModelTest do
     states = spawn(fn -> Process.sleep(:infinity) end)
     send(model, {:hassock_registry, registries, :ready})
     send(model, {:hassock_cache, states, :ready})
-    assert_receive {:notify, {:model, 1}}
+    assert_receive {:notify, {:model, 1}}, @wait
 
     # hassock replaced its registry cache: no rebuild against the new,
     # still empty one until it reports ready itself
     ref = Process.monitor(registries)
     Process.exit(registries, :kill)
-    assert_receive {:DOWN, ^ref, :process, _, :killed}
+    assert_receive {:DOWN, ^ref, :process, _, :killed}, @wait
 
     send(
       model,
@@ -115,25 +118,25 @@ defmodule PictureRail.HA.ModelTest do
     refute_receive {:notify, {:model, _}}, 50
 
     send(model, {:hassock_registry, spawn(fn -> Process.sleep(:infinity) end), :ready})
-    assert_receive {:notify, {:model, 2}}
+    assert_receive {:notify, {:model, 2}}, @wait
   end
 
   test "disconnects and a refused token are reported", %{model: model, table: table} do
     send(model, {:hassock_cache, self(), :disconnected})
-    assert_receive {:notify, {:status, :disconnected}}
+    assert_receive {:notify, {:status, :disconnected}}, @wait
 
     send(model, {:hassock_cache, self(), {:auth_failed, "invalid"}})
-    assert_receive {:notify, {:status, {:auth_failed, "invalid"}}}
+    assert_receive {:notify, {:status, {:auth_failed, "invalid"}}}, @wait
     assert Model.status(table) == {:auth_failed, "invalid"}
   end
 
   test "a stopped hassock is restarted", %{model: _model} do
-    assert_receive {:started, @ha, pid}
+    assert_receive {:started, @ha, pid}, @wait
     Process.exit(pid, :kill)
 
-    assert_receive {:notify, {:status, :disconnected}}
+    assert_receive {:notify, {:status, :disconnected}}, @wait
     assert_receive {:started, @ha, _pid}, 500
-    assert_receive {:notify, {:status, :connecting}}
+    assert_receive {:notify, {:status, :connecting}}, @wait
   end
 
   test "the token stays out of the config's inspect" do

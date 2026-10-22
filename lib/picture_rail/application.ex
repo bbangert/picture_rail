@@ -3,10 +3,14 @@ defmodule PictureRail.Application do
 
   use Application
 
+  alias PictureRail.HA.Picture
   alias PictureRail.Network
 
   @impl true
   def start(_type, _args) do
+    # pictures downloaded for the panel last time aren't on screen any more
+    Picture.clear()
+
     children =
       PictureRail.Hardware.impl().children() ++
         [

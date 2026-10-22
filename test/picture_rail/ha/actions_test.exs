@@ -176,6 +176,51 @@ defmodule PictureRail.HA.ActionsTest do
              Actions.option("climate.t9", :fan_mode, "auto")
   end
 
+  test "grouping: join a player, take one out, or leave as the leader" do
+    kitchen = %EntityState{
+      entity_id: "media_player.kitchen",
+      state: "playing",
+      attributes: %{"group_members" => ["media_player.kitchen", "media_player.office"]}
+    }
+
+    assert %{
+             service: "join",
+             entity_id: "media_player.kitchen",
+             data: %{group_members: ["media_player.den"]}
+           } =
+             Actions.group(kitchen, "media_player.den")
+
+    assert %{service: "unjoin", entity_id: "media_player.office"} =
+             Actions.group(kitchen, "media_player.office")
+
+    # in the office's group, the kitchen (its leader) can't be taken out: the office leaves
+    office = %{kitchen | entity_id: "media_player.office"}
+
+    assert %{service: "unjoin", entity_id: "media_player.office"} =
+             Actions.group(office, "media_player.kitchen")
+
+    # no group reported: join
+    assert %{service: "join"} = Actions.group(%{kitchen | attributes: %{}}, "media_player.den")
+  end
+
+  test "remote commands by integration" do
+    assert %{select: "select", back: "menu"} = Actions.pad("apple_tv")
+    assert %{select: "Confirm", back: "Return"} = Actions.pad("braviatv")
+    assert Actions.pad("broadlink") == nil
+    assert Actions.pad(nil) == nil
+
+    assert Actions.command("remote.loft", "up") == %{
+             domain: "remote",
+             service: "send_command",
+             entity_id: "remote.loft",
+             data: %{command: "up"}
+           }
+
+    assert Actions.detail?("remote.loft")
+    assert Actions.detail?("camera.door")
+    assert Actions.detail?("image.porch")
+  end
+
   test "media toggles go from what's shown" do
     tv = %EntityState{
       entity_id: "media_player.tv",

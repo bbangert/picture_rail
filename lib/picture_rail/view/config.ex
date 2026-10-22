@@ -3,7 +3,8 @@ defmodule PictureRail.View.Config do
   The Emerge configuration for the viewport: the hardware module's screen
   settings plus the app's fonts and asset rules.
 
-  Photos are decoded at their on-screen size and the decoded-image cache
+  Images load from the photo cache and from the Home Assistant pictures
+  the panel shows (`PictureRail.HA.Picture.dir/0`). Photos are decoded at their on-screen size and the decoded-image cache
   is kept small (16 images, 64 MB), so a device with 1 GB of RAM never
   holds full-size originals. The renderer's cache of painted layers (a
   full-screen layer is about 8 MB) is capped at 64 MB, down from 640 MB.
@@ -18,6 +19,8 @@ defmodule PictureRail.View.Config do
     RendererCache,
     RuntimePaths
   }
+
+  alias PictureRail.HA.Picture
 
   @fonts [
     {"Antonio", "fonts/Antonio-Regular.ttf", 400},
@@ -36,7 +39,7 @@ defmodule PictureRail.View.Config do
         cache: %AssetCache{max_entries: 16, max_bytes: 64 * 1024 * 1024},
         runtime_paths: %RuntimePaths{
           enabled: true,
-          allowlist: [PictureRail.Paths.photo_cache_dir()]
+          allowlist: [PictureRail.Paths.photo_cache_dir(), Picture.dir()]
         },
         fonts:
           for(

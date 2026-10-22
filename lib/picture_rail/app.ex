@@ -20,6 +20,7 @@ defmodule PictureRail.App do
   """
   use Solve
 
+  alias PictureRail.HA.Picture
   alias PictureRail.Network
   alias PictureRail.Settings.Watcher
   alias PictureRail.Web.Pairing
@@ -54,8 +55,14 @@ defmodule PictureRail.App do
         dependencies: [:settings, :setup],
         callbacks: %{
           open_setup: fn section -> dispatch(:setup, :open, section) end,
-          first_boot?: &first_boot?/1
+          first_boot?: &first_boot?/1,
+          viewing: fn view -> dispatch(:pictures, :view, view) end
         }
+      ),
+      controller!(
+        name: :pictures,
+        module: PictureRail.App.Pictures,
+        callbacks: %{fetch: &fetch_picture/2, discard: &Picture.discard/1}
       ),
       controller!(name: :photos, module: PictureRail.App.Photos),
       controller!(
@@ -88,6 +95,13 @@ defmodule PictureRail.App do
 
     Task.Supervisor.async_nolink(PictureRail.TaskSup, fn ->
       Hassock.call_service(PictureRail.HA.Connection, call)
+    end)
+  end
+
+  # Runs from the `:pictures` controller, which gets the task's reply.
+  defp fetch_picture(entity_id, last_url) do
+    Task.Supervisor.async_nolink(PictureRail.TaskSup, fn ->
+      Picture.fetch(entity_id, last_url)
     end)
   end
 

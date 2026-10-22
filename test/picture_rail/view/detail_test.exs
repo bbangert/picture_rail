@@ -197,6 +197,86 @@ defmodule PictureRail.View.DetailTest do
     assert text =~ "\"RELAX\""
   end
 
+  test "an Apple TV remote gets a D-pad; one whose commands aren't known doesn't" do
+    remote = es("remote.loft", "on", %{"supported_features" => 0})
+
+    text =
+      remote |> blocks(%{slice: %{entity_id: "remote.loft", platform: "apple_tv"}}) |> shown()
+
+    for label <- ~w(ON OFF BACK UP HOME LEFT OK RIGHT DOWN PLAY/PAUSE),
+        do: assert(text =~ "\"#{label}\"")
+
+    text =
+      remote |> blocks(%{slice: %{entity_id: "remote.loft", platform: "broadlink"}}) |> shown()
+
+    assert text =~ "\"ON\""
+    refute text =~ "\"OK\""
+  end
+
+  test "a camera: its snapshot once downloaded" do
+    camera = es("camera.door", "recording", %{})
+    assert shown(blocks(camera)) =~ "LOADING"
+
+    ctx = %{
+      ha: %{states: %{"camera.door" => camera}, sliders: %{}, armed: %{}},
+      pictures: %{entity_id: "camera.door", path: "/pics/door-1.jpg"},
+      live?: true,
+      content_w: 1574,
+      content_h: 700,
+      portrait?: false
+    }
+
+    assert [{:heading, _, "RECORDING"}, {:block, 634, picture}] =
+             Detail.blocks(ctx, "camera.door")
+
+    assert inspect(picture) =~ "/pics/door-1.jpg"
+
+    # another entity's picture isn't this one's
+    ctx = %{ctx | pictures: %{entity_id: "camera.yard", path: "/pics/yard-1.jpg"}}
+    refute shown(Detail.blocks(ctx, "camera.door")) =~ "yard"
+  end
+
+  test "a grouping player: artwork with now playing, and the players to group with" do
+    kitchen =
+      es("media_player.kitchen", "playing", %{
+        "supported_features" => 524_288,
+        "media_title" => "So What",
+        "group_members" => ["media_player.kitchen", "media_player.office"]
+      })
+
+    ctx = %{
+      ha: %{
+        states: %{
+          "media_player.kitchen" => kitchen,
+          "media_player.office" => es("media_player.office", "playing", %{}),
+          "media_player.den" => es("media_player.den", "unavailable", %{})
+        },
+        names: %{
+          {"media_player.office", :full} => "Office speaker",
+          {"media_player.den", :full} => "Den speaker"
+        },
+        slice: %{
+          entity_id: "media_player.kitchen",
+          platform: "music_assistant",
+          group: ["media_player.den", "media_player.office"]
+        },
+        sliders: %{},
+        armed: %{}
+      },
+      pictures: %{entity_id: "media_player.kitchen", path: "/pics/art-1.png"},
+      live?: true,
+      content_w: 1574,
+      portrait?: false
+    }
+
+    text = ctx |> Detail.blocks("media_player.kitchen") |> shown()
+    assert text =~ "/pics/art-1.png"
+    assert text =~ "\"SO WHAT\""
+    assert text =~ "\"Group\""
+    assert text =~ "\"OFFICE SPEAKER\""
+    assert text =~ "\"DEN SPEAKER\""
+  end
+
   test "unusable: just the state" do
     assert [{:heading, _, "UNAVAILABLE"}] = blocks(es("lock.garage", "unavailable", %{}))
   end

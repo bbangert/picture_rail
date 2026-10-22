@@ -247,7 +247,8 @@ defmodule PictureRail.View do
       settings: solve(App, :settings),
       photos: solve(App, :photos),
       network: solve(App, :network),
-      pairing: solve(App, :pairing)
+      pairing: solve(App, :pairing),
+      pictures: solve(App, :pictures)
     }
 
     # the keyboard takes the whole screen while a Setup field is edited

@@ -60,6 +60,9 @@ defmodule PictureRail.View.Format do
 
   defp state("person", %{state: "not_home"}), do: "away"
 
+  # an image's state is when it last changed
+  defp state("image", _es), do: "latest"
+
   defp state("media_player", %{state: "playing", attributes: %{"media_title" => t}})
        when is_binary(t), do: t
 

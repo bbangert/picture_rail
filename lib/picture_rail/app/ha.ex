@@ -58,7 +58,7 @@ defmodule PictureRail.App.HA do
 
   require Logger
 
-  alias PictureRail.HA.{Actions, EnergyPoller, Model, Overview, Pending}
+  alias PictureRail.HA.{Actions, EnergyPoller, Features, Model, Overview, Pending}
 
   @optimistic_ms 10_000
   @slide_send_ms 250
@@ -269,8 +269,37 @@ defmodule PictureRail.App.HA do
   defp view_slice({:summary, kind}, src), do: Overview.summary_view(src, kind)
   defp view_slice({:device, id}, src), do: Overview.device_view(src, id)
 
-  defp view_slice({:entity, id}, src),
-    do: if(Model.entity(id, src.table), do: %{entity_id: id})
+  defp view_slice({:entity, id}, src) do
+    case Model.entity(id, src.table) do
+      nil -> nil
+      entity -> entity_slice(entity, src)
+    end
+  end
+
+  # An entity's detail: its integration (a remote's commands go by it) and,
+  # for a player that groups, the players of its integration it can group
+  # with (on screen too, so their names and states are in `states`).
+  defp entity_slice(entity, src) do
+    platform = entity.entry && entity.entry.platform
+    %{entity_id: entity.id, platform: platform, group: group_candidates(entity, platform, src)}
+  end
+
+  defp group_candidates(%{domain: "media_player", id: id}, platform, src) do
+    if Features.has?(src.state.(id), :grouping) do
+      for other <- Model.entity_ids(src.table),
+          other != id,
+          String.starts_with?(other, "media_player."),
+          match?(%{entry: %{platform: ^platform}}, Model.entity(other, src.table)),
+          Features.has?(src.state.(other), :grouping) do
+        other
+      end
+      |> Enum.sort_by(&String.downcase(Overview.name(src, &1, :full)))
+    else
+      []
+    end
+  end
+
+  defp group_candidates(_entity, _platform, _src), do: []
 
   defp nav(state, params) do
     memo({:nav, state.revision, params}, fn ->
@@ -314,7 +343,7 @@ defmodule PictureRail.App.HA do
   @doc "Every entity id a slice shows."
   @spec slice_ids(term()) :: [String.t()]
   def slice_ids(slice) when slice in [nil, :loading, :gone], do: []
-  def slice_ids(%{entity_id: id}), do: [id]
+  def slice_ids(%{entity_id: id} = slice), do: [id | Map.get(slice, :group, [])]
   # the energy page shows the grid's live power
   def slice_ids(%{totals: _, power_entity: id}), do: [id]
 

@@ -1,6 +1,7 @@
 defmodule PictureRail.View.ConfigTest do
   use ExUnit.Case, async: true
 
+  alias PictureRail.HA.Picture
   alias PictureRail.View.Config
 
   test "FRAME156 gets DRM output, OpenGL and touch input" do
@@ -19,7 +20,11 @@ defmodule PictureRail.View.ConfigTest do
     assets = Config.build(PictureRail.Hardware.Host).assets
     assert assets.decode_at_size
     assert assets.cache.max_entries == 16
-    assert assets.runtime_paths.allowlist == [PictureRail.Paths.photo_cache_dir()]
+
+    assert assets.runtime_paths.allowlist == [
+             PictureRail.Paths.photo_cache_dir(),
+             Picture.dir()
+           ]
 
     for font <- assets.fonts do
       assert File.exists?(Application.app_dir(:picture_rail, Path.join("priv", font.source)))
