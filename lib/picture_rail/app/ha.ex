@@ -26,11 +26,15 @@ defmodule PictureRail.App.HA do
       shown at once (`sliders`), sent at most every 250 ms
       (`PictureRail.HA.Actions.slider/3`), then held optimistically like
       any call. Each move is activity for the panel (the `:activity`
-      callback): a long drag keeps it up.
+      callback): a long drag keeps it up. A colour slider's call keeps the
+      other half of the colour as shown (`PictureRail.HA.Actions.slider/4`).
+    * `:arm` - `{entity_id, action}`, the first press of a control that
+      needs a second (unlocking): `armed` shows the confirm control for 5 s.
+      A call for the entity disarms it.
 
-  Exposes `%{status:, revision:, view:, slice:, states:, sliders:, names:, nav:,
-  energy:, error:}`; `sliders` the values under a finger by `{entity_id,
-  kind}`.
+  Exposes `%{status:, revision:, view:, slice:, states:, sliders:, armed:,
+  names:, nav:, energy:, error:}`; `sliders` the values under a finger by
+  `{entity_id, kind}`, `armed` the armed action by entity id.
   `slice` is `PictureRail.HA.Overview`'s result for the panel's view, or
   `:loading` before the model's first build, `:gone` when what the view
   showed was removed in Home Assistant, `nil` while the panel is down.
@@ -45,7 +49,7 @@ defmodule PictureRail.App.HA do
   process per view, model revision and on-screen change (`tick`): an event
   for an entity that isn't on screen costs a map lookup.
   """
-  use Solve.Controller, events: [:status, :model, :states, :call, :energy, :press, :slide]
+  use Solve.Controller, events: [:status, :model, :states, :call, :energy, :press, :slide, :arm]
 
   import PictureRail.App.Panel, only: [is_setup_view: 1]
 
@@ -55,6 +59,7 @@ defmodule PictureRail.App.HA do
 
   @optimistic_ms 10_000
   @slide_send_ms 250
+  @armed_ms 5_000
 
   @impl Solve.Controller
   def init(_params, _dependencies) do
@@ -67,7 +72,9 @@ defmodule PictureRail.App.HA do
       error: nil,
       energy: EnergyPoller.latest(),
       # slider values under the finger, not sent yet
-      sliding: %{}
+      sliding: %{},
+      # entity id => {action, ref}: waiting for its confirming press
+      armed: %{}
     }
   end
 
@@ -84,7 +91,16 @@ defmodule PictureRail.App.HA do
       else: state
   end
 
-  def call(request, state, _deps, callbacks), do: start_call(request, state, callbacks)
+  def call(request, state, _deps, callbacks) do
+    state = %{state | armed: Map.delete(state.armed, request.entity_id)}
+    start_call(request, state, callbacks)
+  end
+
+  def arm({entity_id, action}, state) do
+    ref = make_ref()
+    Process.send_after(self(), {:disarm, entity_id, ref}, @armed_ms)
+    %{state | armed: Map.put(state.armed, entity_id, {action, ref})}
+  end
 
   def press({entity_id, long?}, state, _deps, callbacks, params) do
     es = with_pending(source(params).state.(entity_id), state.pending[entity_id])
@@ -113,27 +129,35 @@ defmodule PictureRail.App.HA do
     %{state | sliding: Map.put(state.sliding, key, value)}
   end
 
-  def handle_info({ref, result}, state, _deps, _callbacks) when is_reference(ref),
+  def handle_info({ref, result}, state, _deps, _callbacks, _params) when is_reference(ref),
     do: call_done(ref, result, state)
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, state, _deps, _callbacks),
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state, _deps, _callbacks, _params),
     do: call_done(ref, {:error, {:crashed, reason}}, state)
 
-  def handle_info({:expire, entity_id, ref}, state, _deps, _callbacks),
+  def handle_info({:expire, entity_id, ref}, state, _deps, _callbacks, _params),
     do: expire(entity_id, ref, state)
+
+  def handle_info({:disarm, entity_id, ref}, state, _deps, _callbacks, _params) do
+    case state.armed do
+      %{^entity_id => {_action, ^ref}} -> %{state | armed: Map.delete(state.armed, entity_id)}
+      _ -> state
+    end
+  end
 
   # Sent: from here on the value is held as an optimistic attribute until
   # Home Assistant reports it.
-  def handle_info({:slide_send, {entity_id, kind} = key}, state, _deps, callbacks) do
+  def handle_info({:slide_send, {entity_id, kind} = key}, state, _deps, callbacks, params) do
     {value, sliding} = Map.pop(state.sliding, key)
     state = %{state | sliding: sliding}
+    es = with_pending(source(params).state.(entity_id), state.pending[entity_id])
 
     if value == nil,
       do: state,
-      else: start_call(Actions.slider(entity_id, kind, value), state, callbacks)
+      else: start_call(Actions.slider(entity_id, kind, value, es), state, callbacks)
   end
 
-  def handle_info(_message, state, _deps, _callbacks), do: state
+  def handle_info(_message, state, _deps, _callbacks, _params), do: state
 
   defp open_detail(entity_id, state, callbacks) do
     callbacks.open.({:entity, entity_id})
@@ -209,12 +233,25 @@ defmodule PictureRail.App.HA do
 
   def reported?(es, %{state: wanted, attrs: attrs}) do
     (wanted == nil or es.state == wanted) and
-      Enum.all?(attrs, fn {key, value} -> close?(es.attributes[key], value) end)
+      Enum.all?(attrs, fn {key, value} -> close?(key, es.attributes[key], value) end)
   end
 
-  # Home Assistant rounds (brightness 0-255 from a percentage, positions).
-  defp close?(a, b) when is_number(a) and is_number(b), do: abs(a - b) <= max(1.5, abs(b) * 0.02)
-  defp close?(a, b), do: a == b
+  # A thermostat's setpoints come back as sent, and a step can be 0.5.
+  @exact ~w(temperature target_temp_low target_temp_high)
+
+  # Home Assistant rounds (brightness 0-255 from a percentage, positions,
+  # kelvin through mireds), and a colour comes back through the light's
+  # own colour space.
+  defp close?(key, a, b) when key in @exact and is_number(a) and is_number(b),
+    do: abs(a - b) < 0.01
+
+  defp close?(_key, a, b) when is_number(a) and is_number(b),
+    do: abs(a - b) <= max(1.5, abs(b) * 0.02)
+
+  defp close?("hs_color", [h, s], [wanted_h, wanted_s]) when is_number(h) and is_number(s),
+    do: abs(h - wanted_h) <= 4 and abs(s - wanted_s) <= 4
+
+  defp close?(_key, a, b), do: a == b
 
   defp with_pending(es, nil), do: es
   defp with_pending(nil, _pending), do: nil
@@ -356,6 +393,7 @@ defmodule PictureRail.App.HA do
       slice: slice,
       states: states,
       sliders: state.sliding,
+      armed: Map.new(state.armed, fn {id, {action, _ref}} -> {id, action} end),
       names: names(ids, state, params),
       nav: if(visible?, do: nav(state, params), else: []),
       # only while the panel is up, so a refresh doesn't redraw the slideshow
