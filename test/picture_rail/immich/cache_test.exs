@@ -157,6 +157,14 @@ defmodule PictureRail.Immich.CacheTest do
 
   defp wait_ready(n), do: await_stats(&(&1.ready >= n and not &1.downloading?))
 
+  defp poll(fun, tries \\ 100) do
+    cond do
+      fun.() -> true
+      tries == 0 -> false
+      true -> Process.sleep(20) && poll(fun, tries - 1)
+    end
+  end
+
   defp jpgs(dir), do: dir |> Path.join("*.jpg") |> Path.wildcard() |> length()
 
   test "fills the window and refills it as photos are shown", %{tmp_dir: dir} do
@@ -310,6 +318,28 @@ defmodule PictureRail.Immich.CacheTest do
 
     assert MapSet.size(downloaded) > 0
     assert MapSet.disjoint?(downloaded, taken)
+  end
+
+  test "a pass left with only a photo already on disk starts the next one", %{tmp_dir: dir} do
+    agent = Fake.start(Enum.map(1..3, &asset/1))
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    wait_ready(1)
+    [on_disk] = dir |> on_disk() |> MapSet.to_list()
+    stop_supervised!(cache)
+
+    # after restarts, the pass has seen the other two; the one on disk is all that's left
+    others = for n <- 1..3, "p#{n}" != on_disk, do: ["p#{n}", ?\t, Base.encode64("sum#{n}"), ?\n]
+    File.write!(Path.join(dir, "seen.log"), others)
+
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    await_stats(&(&1.status == :online))
+    assert {:ok, %{asset: %{id: ^on_disk}}} = Cache.next(cache)
+
+    # a new pass begins, so the window refills with another photo (polled:
+    # stats messages from before the restart may still be waiting)
+    assert poll(fn -> Cache.stats(cache).ready == 1 end)
+    assert {:ok, %{asset: %{id: next}}} = Cache.next(cache)
+    refute next == on_disk
   end
 
   test "a pass shows every photo, then a new one starts", %{tmp_dir: dir} do

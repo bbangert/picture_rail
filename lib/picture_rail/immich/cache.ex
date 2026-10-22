@@ -457,17 +457,20 @@ defmodule PictureRail.Immich.Cache do
   end
 
   # The rest of the current pass: the photos it hasn't seen, shuffled. When
-  # it has seen them all (those it can't download don't count: they're
-  # never seen), a new pass starts with every photo.
+  # it has seen them all, a new pass starts with every photo. Photos it
+  # can't download don't count (they're never seen), nor do those already
+  # on disk: they're shown anyway, and a pass left with only those would
+  # never download again.
   defp build_pass(%{index: []} = state), do: state
 
   defp build_pass(state) do
-    case Enum.reject(state.index, &(MapSet.member?(state.seen, key(&1)) or bad?(state, &1))) do
+    case Enum.reject(state.index, &(seen?(state, &1) or bad?(state, &1) or on_disk?(state, &1))) do
       [] -> %{state | pass: Enum.shuffle(state.index)} |> write_seen(MapSet.new())
       unseen -> %{state | pass: Enum.shuffle(unseen)}
     end
   end
 
+  defp seen?(state, asset), do: MapSet.member?(state.seen, key(asset))
   defp bad?(state, asset), do: MapSet.member?(state.bad, key(asset))
 
   # A photo taken by the pass: remembered, across restarts too.
