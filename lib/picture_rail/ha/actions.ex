@@ -172,7 +172,7 @@ defmodule PictureRail.HA.Actions do
     end
   end
 
-  defp moved(value, dir, step, {min, max}, request) when is_number(value) do
+  defp moved(value, dir, step, {min, max}, request) when is_number(value) and min <= max do
     new = value |> Kernel.+(dir * step) |> snap(step) |> Kernel.max(min) |> Kernel.min(max)
     if (new - value) * dir > 0, do: request.(new)
   end
@@ -339,9 +339,10 @@ defmodule PictureRail.HA.Actions do
   def cycle_repeat(%{entity_id: id, attributes: attrs}) do
     next =
       case attrs["repeat"] do
-        "off" -> "all"
         "all" -> "one"
-        _ -> "off"
+        "one" -> "off"
+        # off, or not reported (shown as off)
+        _ -> "all"
       end
 
     id

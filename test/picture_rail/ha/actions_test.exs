@@ -106,6 +106,24 @@ defmodule PictureRail.HA.ActionsTest do
       edges = thermostat(%{"target_temp_low" => 50, "target_temp_high" => 90})
       assert Actions.climate_target(edges, :low, -1) == nil
       assert Actions.climate_target(edges, :high, 1) == nil
+
+      # no room at all: nothing, rather than a value past a limit
+      squeezed = thermostat(%{"target_temp_low" => 50, "target_temp_high" => 50})
+      assert Actions.climate_target(squeezed, :low, -1) == nil
+      assert Actions.climate_target(squeezed, :low, 1) == nil
+
+      assert Actions.climate_target(
+               %{
+                 squeezed
+                 | attributes: %{
+                     squeezed.attributes
+                     | "target_temp_low" => 90,
+                       "target_temp_high" => 90
+                   }
+               },
+               :high,
+               1
+             ) == nil
     end
 
     test "one target, on the step's grid" do
@@ -168,6 +186,15 @@ defmodule PictureRail.HA.ActionsTest do
     assert %{data: %{is_volume_muted: false}} = Actions.toggle_mute(tv)
     assert %{data: %{shuffle: true}} = Actions.toggle_shuffle(tv)
     assert %{data: %{repeat: "one"}} = Actions.cycle_repeat(tv)
+
+    for repeat <- [nil, "off"],
+        do:
+          assert(
+            %{data: %{repeat: "all"}} =
+              Actions.cycle_repeat(%{tv | attributes: %{"repeat" => repeat}})
+          )
+
+    assert %{data: %{repeat: "all"}} = Actions.cycle_repeat(%{tv | attributes: %{}})
     # on reports idle/playing/paused, off off/standby: nothing to hold
     assert Actions.power("media_player.tv", true) ==
              %{domain: "media_player", service: "turn_on", entity_id: "media_player.tv"}

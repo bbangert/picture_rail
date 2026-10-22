@@ -352,7 +352,7 @@ defmodule PictureRail.View.Detail do
         label: "CONFIRM #{String.upcase(label)}",
         fill: Theme.color(:red),
         width: px(@button_w + 100),
-        attrs: [Event.on_press(call(ctx, Actions.lock(ctx.id, action)))]
+        attrs: [Event.on_press(event(ctx.ha, :confirm, {ctx.id, action}))]
       )
     else
       button(ctx, label, event(ctx.ha, :arm, {ctx.id, action}), active?)

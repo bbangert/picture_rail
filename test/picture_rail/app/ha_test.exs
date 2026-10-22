@@ -304,6 +304,52 @@ defmodule PictureRail.App.HATest do
     assert_received {:called, %{data: %{hs_color: [200, 20]}}}
   end
 
+  test "a confirm after the arming ran out does nothing", %{state: state, params: params} do
+    deps = panel({:entity, "light.ceiling"})
+    state = HA.arm({"lock.door", :unlock}, state)
+    {_action, ref} = state.armed["lock.door"]
+    disarmed = HA.handle_info({:disarm, "lock.door", ref}, state, deps, %{}, params)
+
+    assert HA.confirm({"lock.door", :unlock}, disarmed, deps, callbacks()) == disarmed
+    # nor does one for another action
+    assert HA.confirm({"lock.door", :open}, state, deps, callbacks()) == state
+    refute_received {:called, _}
+
+    state = HA.confirm({"lock.door", :unlock}, state, deps, callbacks())
+    assert_received {:called, %{domain: "lock", service: "unlock", entity_id: "lock.door"}}
+    assert state.armed == %{}
+  end
+
+  test "controls used one after another keep each other's pending values", %{
+    state: state,
+    params: params
+  } do
+    deps = panel({:entity, "light.ceiling"})
+
+    report("light.ceiling", fn es ->
+      %{es | attributes: Map.put(es.attributes, "hs_color", [30.0, 64.0])}
+    end)
+
+    send_slider = fn state, kind, value ->
+      state = HA.slide({{"light.ceiling", kind}, value}, state, deps, callbacks())
+      HA.handle_info({:slide_send, {"light.ceiling", kind}}, state, deps, callbacks(), params)
+    end
+
+    state = state |> send_slider.(:hue, 200) |> send_slider.(:brightness, 40)
+    send_slider.(state, :saturation, 20)
+    assert_received {:called, %{data: %{hs_color: [200, 20]}}}
+
+    # turning it off is a new state: what was pending for on goes
+    state =
+      HA.start_call(
+        %{domain: "light", service: "turn_off", entity_id: "light.ceiling", optimistic: "off"},
+        state,
+        callbacks()
+      )
+
+    assert state.pending["light.ceiling"].attrs == %{}
+  end
+
   test "a colour settles around the hue circle", %{state: state, params: params} do
     deps = panel({:entity, "light.ceiling"})
     callbacks = %{call_service: fn _ -> %{ref: make_ref()} end}

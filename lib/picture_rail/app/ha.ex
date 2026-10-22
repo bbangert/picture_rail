@@ -28,9 +28,11 @@ defmodule PictureRail.App.HA do
       any call. Each move is activity for the panel (the `:activity`
       callback): a long drag keeps it up. A colour slider's call keeps the
       other half of the colour as shown (`PictureRail.HA.Actions.slider/4`).
-    * `:arm` - `{entity_id, action}`, the first press of a control that
-      needs a second (unlocking): `armed` shows the confirm control for 5 s.
-      A call for the entity disarms it.
+    * `:arm` - `{entity_id, action}`, the first press of a lock's
+      `:unlock` or `:open`: `armed` shows the confirm control for 5 s. A
+      call for the entity disarms it.
+    * `:confirm` - `{entity_id, action}`, the second press: calls the
+      action (`PictureRail.HA.Actions.lock/2`) only if it's still armed.
 
   Exposes `%{status:, revision:, view:, slice:, states:, sliders:, armed:,
   names:, nav:, energy:, error:}`; `sliders` the values under a finger by
@@ -49,7 +51,8 @@ defmodule PictureRail.App.HA do
   process per view, model revision and on-screen change (`tick`): an event
   for an entity that isn't on screen costs a map lookup.
   """
-  use Solve.Controller, events: [:status, :model, :states, :call, :energy, :press, :slide, :arm]
+  use Solve.Controller,
+    events: [:status, :model, :states, :call, :energy, :press, :slide, :arm, :confirm]
 
   import PictureRail.App.Panel, only: [is_setup_view: 1]
 
@@ -100,6 +103,19 @@ defmodule PictureRail.App.HA do
     ref = make_ref()
     Process.send_after(self(), {:disarm, entity_id, ref}, @armed_ms)
     %{state | armed: Map.put(state.armed, entity_id, {action, ref})}
+  end
+
+  # A confirm from a render made while armed can arrive after the arming
+  # ran out: then it does nothing.
+  def confirm({entity_id, action}, state, _deps, callbacks) do
+    case state.armed do
+      %{^entity_id => {^action, _ref}} ->
+        state = %{state | armed: Map.delete(state.armed, entity_id)}
+        start_call(Actions.lock(entity_id, action), state, callbacks)
+
+      _ ->
+        state
+    end
   end
 
   def press({entity_id, long?}, state, _deps, callbacks, params) do
@@ -177,11 +193,28 @@ defmodule PictureRail.App.HA do
       %{state | error: nil}
     else
       Process.send_after(self(), {:expire, request.entity_id, ref}, @optimistic_ms)
-      entry = %{state: optimistic, attrs: attrs, ref: ref}
+
+      entry =
+        merge_pending(state.pending[request.entity_id], %{
+          state: optimistic,
+          attrs: attrs,
+          ref: ref
+        })
+
       pending = Map.put(state.pending, request.entity_id, entry)
       %{state | pending: pending, error: nil, tick: state.tick + 1}
     end
   end
+
+  # A call for an entity with values pending keeps them, unless it sets
+  # another state (off after a brightness): a hue sent, then a brightness,
+  # then a saturation that's sent with the hue. The entry goes by the
+  # latest call's ref (its failure or expiry ends all of it).
+  defp merge_pending(%{state: old} = prev, %{state: new} = entry)
+       when old == nil or new == nil or old == new,
+       do: %{entry | state: new || old, attrs: Map.merge(prev.attrs, entry.attrs)}
+
+  defp merge_pending(_prev, entry), do: entry
 
   @doc false
   # A finished call: success keeps the optimistic value until HA reports
