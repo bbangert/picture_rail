@@ -480,6 +480,34 @@ defmodule PictureRail.Immich.CacheTest do
     refute_received {:stats, %{status: :offline}}
   end
 
+  test "a photo that keeps timing out doesn't stop the next passes", %{tmp_dir: dir} do
+    agent = Fake.start(Enum.map(1..4, &asset/1), formats: %{"p2" => {:error, :offline}})
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    wait_ready(1)
+
+    # three passes over the good photos, each downloaded anew
+    ids =
+      for _ <- 1..9 do
+        assert poll(fn -> Cache.stats(cache).ready == 1 end)
+        {:ok, %{asset: %{id: id}}} = Cache.next(cache)
+        id
+      end
+
+    assert ids |> Enum.frequencies() |> Map.values() |> Enum.sort() == [3, 3, 3]
+
+    # and each pass tries it again: once it downloads, it's shown
+    Fake.set(agent, &%{&1 | formats: %{}})
+
+    ids =
+      for _ <- 1..8 do
+        assert poll(fn -> Cache.stats(cache).ready == 1 end)
+        {:ok, %{asset: %{id: id}}} = Cache.next(cache)
+        id
+      end
+
+    assert "p2" in ids
+  end
+
   test "an exception from the Immich side counts as offline, not a crash", %{tmp_dir: dir} do
     agent = Fake.start([asset(1)])
     Fake.set(agent, &Map.put(&1, :raise, true))
