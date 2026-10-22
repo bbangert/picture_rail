@@ -13,11 +13,11 @@ defmodule PictureRail.App.HA do
   From the view:
 
     * `:call` - `%{domain:, service:, entity_id:, data: map, optimistic: state,
-      optimistic_attrs: map}` (both optimistic keys optional). The call runs
-      in a task (the `:call_service` callback). With an optimistic state or
-      attributes, the entity shows them at once, until Home Assistant
-      reports them, the call fails (rolled back, and `error` set), or 10 s
-      pass.
+      optimistic_attrs: map, supersedes: [attr]}` (the last three
+      optional). The call runs in a task (the `:call_service` callback).
+      With an optimistic state or attributes, the entity shows them at
+      once, each until Home Assistant reports it, its call fails (rolled
+      back, and `error` set), or 10 s pass (`PictureRail.HA.Pending`).
     * `:press` - `{entity_id, long?}`, a pill's press (the viewport times
       the touch): a long press opens the entity's detail; a tap toggles or
       runs it (`PictureRail.HA.Actions.tap/2`), or opens its detail when
@@ -58,7 +58,7 @@ defmodule PictureRail.App.HA do
 
   require Logger
 
-  alias PictureRail.HA.{Actions, EnergyPoller, Model, Overview}
+  alias PictureRail.HA.{Actions, EnergyPoller, Model, Overview, Pending}
 
   @optimistic_ms 10_000
   @slide_send_ms 250
@@ -193,32 +193,14 @@ defmodule PictureRail.App.HA do
       %{state | error: nil}
     else
       Process.send_after(self(), {:expire, request.entity_id, ref}, @optimistic_ms)
-
-      entry =
-        merge_pending(state.pending[request.entity_id], %{
-          state: optimistic,
-          attrs: attrs,
-          ref: ref
-        })
-
-      pending = Map.put(state.pending, request.entity_id, entry)
+      pending = Pending.put(state.pending, request, ref)
       %{state | pending: pending, error: nil, tick: state.tick + 1}
     end
   end
 
-  # A call for an entity with values pending keeps them, unless it sets
-  # another state (off after a brightness): a hue sent, then a brightness,
-  # then a saturation that's sent with the hue. The entry goes by the
-  # latest call's ref (its failure or expiry ends all of it).
-  defp merge_pending(%{state: old} = prev, %{state: new} = entry)
-       when old == nil or new == nil or old == new,
-       do: %{entry | state: new || old, attrs: Map.merge(prev.attrs, entry.attrs)}
-
-  defp merge_pending(_prev, entry), do: entry
-
   @doc false
-  # A finished call: success keeps the optimistic value until HA reports
-  # it; failure rolls it back.
+  # A finished call: success keeps its optimistic values until HA reports
+  # them; failure rolls back what it set.
   @spec call_done(reference(), term(), map()) :: map()
   def call_done(ref, result, state) do
     Process.demonitor(ref, [:flush])
@@ -229,18 +211,14 @@ defmodule PictureRail.App.HA do
 
       {:error, reason} ->
         Logger.warning("HA: service call failed: #{inspect(reason)}")
-        pending = state.pending |> Enum.reject(fn {_id, p} -> p.ref == ref end) |> Map.new()
-        %{state | pending: pending, error: reason, tick: state.tick + 1}
+        %{state | pending: Pending.drop(state.pending, ref), error: reason, tick: state.tick + 1}
     end
   end
 
   defp expire(entity_id, ref, state) do
-    case state.pending do
-      %{^entity_id => %{ref: ^ref}} ->
-        %{state | pending: Map.delete(state.pending, entity_id), tick: state.tick + 1}
-
-      _ ->
-        state
+    case Pending.expire(state.pending, entity_id, ref) do
+      same when same == state.pending -> state
+      pending -> %{state | pending: pending, tick: state.tick + 1}
     end
   end
 
@@ -248,56 +226,11 @@ defmodule PictureRail.App.HA do
   # report comes next: one from before the call, or from an earlier tap,
   # leaves it in place.
   defp settle(state, ids, src) do
-    pending =
-      Enum.reduce(ids, state.pending, fn id, pending ->
-        with %{^id => entry} <- pending, true <- reported?(src.state.(id), entry) do
-          Map.delete(pending, id)
-        else
-          _ -> pending
-        end
-      end)
-
+    pending = Enum.reduce(ids, state.pending, &Pending.settle(&2, &1, src.state.(&1)))
     %{state | pending: pending}
   end
 
-  @doc false
-  @spec reported?(Hassock.EntityState.t() | nil, map()) :: boolean()
-  def reported?(nil, _entry), do: false
-
-  def reported?(es, %{state: wanted, attrs: attrs}) do
-    (wanted == nil or es.state == wanted) and
-      Enum.all?(attrs, fn {key, value} -> close?(key, es.attributes[key], value) end)
-  end
-
-  # A thermostat's setpoints come back as sent, and a step can be 0.5.
-  @exact ~w(temperature target_temp_low target_temp_high)
-
-  # Home Assistant rounds (brightness 0-255 from a percentage, positions,
-  # kelvin through mireds), and a colour comes back through the light's
-  # own colour space.
-  defp close?(key, a, b) when key in @exact and is_number(a) and is_number(b),
-    do: abs(a - b) < 0.01
-
-  defp close?(_key, a, b) when is_number(a) and is_number(b),
-    do: abs(a - b) <= max(1.5, abs(b) * 0.02)
-
-  defp close?("hs_color", [h, s], [wanted_h, wanted_s]) when is_number(h) and is_number(s),
-    do: hue_distance(h, wanted_h) <= 4 and abs(s - wanted_s) <= 4
-
-  defp close?(_key, a, b), do: a == b
-
-  # around the circle: 359 and 1 are 2 apart, 360 and 0 the same red
-  defp hue_distance(a, b) do
-    d = :math.fmod(abs(a - b), 360)
-    min(d, 360 - d)
-  end
-
-  defp with_pending(es, nil), do: es
-  defp with_pending(nil, _pending), do: nil
-
-  defp with_pending(es, %{state: wanted, attrs: attrs}) do
-    %{es | state: wanted || es.state, attributes: Map.merge(es.attributes || %{}, attrs)}
-  end
+  defp with_pending(es, entry), do: Pending.shown(es, entry)
 
   # -- The slice --
 

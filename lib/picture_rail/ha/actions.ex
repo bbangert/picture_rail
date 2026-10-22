@@ -3,8 +3,10 @@ defmodule PictureRail.HA.Actions do
   What the panel's controls do in Home Assistant: a pill's tap (toggle or
   run), which entities have a detail view, and the service calls behind
   the detail views' controls. Requests are maps the `:ha` controller calls
-  and holds optimistically: `%{domain:, service:, entity_id:, data:,
-  optimistic:, optimistic_attrs:}` (the last three optional).
+  and holds optimistically (`PictureRail.HA.Pending`): `%{domain:,
+  service:, entity_id:, data:, optimistic:, optimistic_attrs:,
+  supersedes:}` (the last four optional); `supersedes` lists attributes
+  the call makes obsolete, so values still pending for them end.
   """
 
   alias PictureRail.HA.{Index, Overview}
@@ -77,7 +79,8 @@ defmodule PictureRail.HA.Actions do
       service: "turn_on",
       entity_id: id,
       data: %{color_temp_kelvin: round(v)},
-      optimistic_attrs: %{"color_temp_kelvin" => round(v)}
+      optimistic_attrs: %{"color_temp_kelvin" => round(v)},
+      supersedes: ["hs_color"]
     }
 
   def slider(id, :hue, v, es), do: color(id, [round(v), Enum.at(hs(es), 1)])
@@ -117,10 +120,13 @@ defmodule PictureRail.HA.Actions do
       entity_id: id,
       data: %{hs_color: [h, s]},
       optimistic: "on",
-      optimistic_attrs: %{"hs_color" => [h, s]}
+      optimistic_attrs: %{"hs_color" => [h, s]},
+      supersedes: ["color_temp_kelvin"]
     }
 
   # -- Climate --
+
+  @setpoints ~w(temperature target_temp_low target_temp_high)
 
   @doc """
   How far a thermostat's −/+ moves: its `target_temp_step`, else what Home
@@ -191,7 +197,8 @@ defmodule PictureRail.HA.Actions do
       service: "set_temperature",
       entity_id: id,
       data: %{temperature: t},
-      optimistic_attrs: %{"temperature" => t}
+      optimistic_attrs: %{"temperature" => t},
+      supersedes: @setpoints
     }
 
   defp set_range(id, low, high),
@@ -200,7 +207,8 @@ defmodule PictureRail.HA.Actions do
       service: "set_temperature",
       entity_id: id,
       data: %{target_temp_low: low, target_temp_high: high},
-      optimistic_attrs: %{"target_temp_low" => low, "target_temp_high" => high}
+      optimistic_attrs: %{"target_temp_low" => low, "target_temp_high" => high},
+      supersedes: @setpoints
     }
 
   # -- Picking one of a list --
@@ -224,7 +232,9 @@ defmodule PictureRail.HA.Actions do
       service: "set_hvac_mode",
       entity_id: id,
       data: %{hvac_mode: mode},
-      optimistic: mode
+      optimistic: mode,
+      # a mode has its own setpoints: one target, or a range
+      supersedes: @setpoints
     }
 
   def option(id, kind, value) when kind in [:fan_mode, :preset_mode, :swing_mode] do

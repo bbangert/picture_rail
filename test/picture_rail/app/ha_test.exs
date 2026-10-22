@@ -217,7 +217,7 @@ defmodule PictureRail.App.HATest do
 
     state = HA.press({"light.ceiling", false}, state, deps, callbacks(), params)
     assert_received {:called, %{entity_id: "light.ceiling", service: "turn_off"}}
-    assert state.pending["light.ceiling"].state == "off"
+    assert {"off", _ref} = state.pending["light.ceiling"].state
 
     # a tap again goes by what's shown (off, pending): on
     HA.press({"light.ceiling", false}, state, deps, callbacks(), params)
@@ -252,7 +252,7 @@ defmodule PictureRail.App.HATest do
     state = HA.handle_info({:slide_send, key}, state, deps, callbacks(), params)
     assert_received {:called, %{service: "turn_on", data: %{brightness_pct: 55}}}
     assert HA.expose(state, deps, params).sliders == %{}
-    assert state.pending["light.ceiling"].attrs["brightness"] == round(55 * 255 / 100)
+    assert {140, _ref} = state.pending["light.ceiling"].attrs["brightness"]
   end
 
   test "unlocking takes a second press within 5 s; a call disarms", %{
@@ -350,15 +350,48 @@ defmodule PictureRail.App.HATest do
     assert state.pending["light.ceiling"].attrs == %{}
   end
 
+  test "a failed call rolls back only what it set", %{state: state, params: params} do
+    deps = panel({:entity, "light.ceiling"})
+    hue = make_ref()
+    brightness = make_ref()
+
+    state =
+      Actions.color("light.ceiling", [200, 64])
+      |> HA.start_call(state, %{call_service: fn _ -> %{ref: hue} end})
+      |> then(
+        &HA.start_call(Actions.slider("light.ceiling", :brightness, 40), &1, %{
+          call_service: fn _ -> %{ref: brightness} end
+        })
+      )
+      |> then(&HA.call_done(hue, {:error, :timeout}, &1))
+
+    shown = HA.expose(state, deps, params).states["light.ceiling"]
+    refute shown.attributes["hs_color"] == [200, 64]
+    assert shown.attributes["brightness"] == 102
+
+    # and HA reporting the brightness ends it, with no failed hue in the way
+    report(
+      "light.ceiling",
+      &%{&1 | state: "on", attributes: Map.put(&1.attributes, "brightness", 102)}
+    )
+
+    assert HA.states(["light.ceiling"], state, deps, %{}, params).pending == %{}
+  end
+
   test "a colour settles around the hue circle", %{state: state, params: params} do
     deps = panel({:entity, "light.ceiling"})
     callbacks = %{call_service: fn _ -> %{ref: make_ref()} end}
 
-    for {sent, reported} <- [{360, 0.0}, {359, 1.0}, {2, 358.5}] do
-      state = HA.start_call(Actions.color("light.ceiling", [sent, 80]), state, callbacks)
+    for {sent, reported} <- [
+          {[360, 80], [0.0, 80.0]},
+          {[359, 80], [1.0, 80.0]},
+          {[2, 80], [358.5, 80.0]},
+          {[200, 0], [0.0, 0.0]}
+        ] do
+      state = HA.start_call(Actions.color("light.ceiling", sent), state, callbacks)
 
       report("light.ceiling", fn es ->
-        %{es | state: "on", attributes: Map.put(es.attributes, "hs_color", [reported, 80.0])}
+        %{es | state: "on", attributes: Map.put(es.attributes, "hs_color", reported)}
       end)
 
       assert HA.states(["light.ceiling"], state, deps, %{}, params).pending == %{}
