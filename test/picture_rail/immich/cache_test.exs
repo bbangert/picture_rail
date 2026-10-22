@@ -378,6 +378,28 @@ defmodule PictureRail.Immich.CacheTest do
     assert Enum.sort(rest) == ["p1", "p2", "p3"] -- [first]
   end
 
+  test "a photo removed from the albums leaves the log; the rest stays", %{tmp_dir: dir} do
+    agent = Fake.start(Enum.map(1..6, &asset/1))
+    {_pid, cache} = start_cache(agent, dir, window: 2, album_poll_ms: 20)
+    wait_ready(2)
+    {:ok, _} = Cache.next(cache)
+    wait_ready(2)
+
+    logged = seen(dir)
+    assert MapSet.size(logged) == 3
+    [gone | kept] = Enum.sort(logged)
+
+    Fake.set(agent, fn s ->
+      assets = Enum.reject(s.assets, &(&1.id == gone))
+      %{s | assets: assets, album: %{s.album | asset_count: 5, updated_at: "t1"}}
+    end)
+
+    await_stats(&(&1.photos == 5))
+    assert poll(fn -> not MapSet.member?(seen(dir), gone) end)
+    # the pass hasn't rolled over: the other photos it took are still logged
+    assert MapSet.subset?(MapSet.new(kept), seen(dir))
+  end
+
   test "a pass shows every photo, then a new one starts", %{tmp_dir: dir} do
     agent = Fake.start(Enum.map(1..4, &asset/1))
     {_pid, cache} = start_cache(agent, dir, window: 1)
