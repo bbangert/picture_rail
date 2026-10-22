@@ -13,11 +13,11 @@ defmodule PictureRail.App.HA do
   From the view:
 
     * `:call` - `%{domain:, service:, entity_id:, data: map, optimistic: state,
-      optimistic_attrs: map}` (both optimistic keys optional). The call runs
-      in a task (the `:call_service` callback). With an optimistic state or
-      attributes, the entity shows them at once, until Home Assistant
-      reports them, the call fails (rolled back, and `error` set), or 10 s
-      pass.
+      optimistic_attrs: map, supersedes: [attr]}` (the last three
+      optional). The call runs in a task (the `:call_service` callback).
+      With an optimistic state or attributes, the entity shows them at
+      once, each until Home Assistant reports it, its call fails (rolled
+      back, and `error` set), or 10 s pass (`PictureRail.HA.Pending`).
     * `:press` - `{entity_id, long?}`, a pill's press (the viewport times
       the touch): a long press opens the entity's detail; a tap toggles or
       runs it (`PictureRail.HA.Actions.tap/2`), or opens its detail when
@@ -26,11 +26,17 @@ defmodule PictureRail.App.HA do
       shown at once (`sliders`), sent at most every 250 ms
       (`PictureRail.HA.Actions.slider/3`), then held optimistically like
       any call. Each move is activity for the panel (the `:activity`
-      callback): a long drag keeps it up.
+      callback): a long drag keeps it up. A colour slider's call keeps the
+      other half of the colour as shown (`PictureRail.HA.Actions.slider/4`).
+    * `:arm` - `{entity_id, action}`, the first press of a lock's
+      `:unlock` or `:open`: `armed` shows the confirm control for 5 s. A
+      call for the entity disarms it.
+    * `:confirm` - `{entity_id, action}`, the second press: calls the
+      action (`PictureRail.HA.Actions.lock/2`) only if it's still armed.
 
-  Exposes `%{status:, revision:, view:, slice:, states:, sliders:, names:, nav:,
-  energy:, error:}`; `sliders` the values under a finger by `{entity_id,
-  kind}`.
+  Exposes `%{status:, revision:, view:, slice:, states:, sliders:, armed:,
+  names:, nav:, energy:, error:}`; `sliders` the values under a finger by
+  `{entity_id, kind}`, `armed` the armed action by entity id.
   `slice` is `PictureRail.HA.Overview`'s result for the panel's view, or
   `:loading` before the model's first build, `:gone` when what the view
   showed was removed in Home Assistant, `nil` while the panel is down.
@@ -45,16 +51,18 @@ defmodule PictureRail.App.HA do
   process per view, model revision and on-screen change (`tick`): an event
   for an entity that isn't on screen costs a map lookup.
   """
-  use Solve.Controller, events: [:status, :model, :states, :call, :energy, :press, :slide]
+  use Solve.Controller,
+    events: [:status, :model, :states, :call, :energy, :press, :slide, :arm, :confirm]
 
   import PictureRail.App.Panel, only: [is_setup_view: 1]
 
   require Logger
 
-  alias PictureRail.HA.{Actions, EnergyPoller, Model, Overview}
+  alias PictureRail.HA.{Actions, EnergyPoller, Model, Overview, Pending}
 
   @optimistic_ms 10_000
   @slide_send_ms 250
+  @armed_ms 5_000
 
   @impl Solve.Controller
   def init(_params, _dependencies) do
@@ -67,7 +75,9 @@ defmodule PictureRail.App.HA do
       error: nil,
       energy: EnergyPoller.latest(),
       # slider values under the finger, not sent yet
-      sliding: %{}
+      sliding: %{},
+      # entity id => {action, ref}: waiting for its confirming press
+      armed: %{}
     }
   end
 
@@ -84,7 +94,29 @@ defmodule PictureRail.App.HA do
       else: state
   end
 
-  def call(request, state, _deps, callbacks), do: start_call(request, state, callbacks)
+  def call(request, state, _deps, callbacks) do
+    state = %{state | armed: Map.delete(state.armed, request.entity_id)}
+    start_call(request, state, callbacks)
+  end
+
+  def arm({entity_id, action}, state) do
+    ref = make_ref()
+    Process.send_after(self(), {:disarm, entity_id, ref}, @armed_ms)
+    %{state | armed: Map.put(state.armed, entity_id, {action, ref})}
+  end
+
+  # A confirm from a render made while armed can arrive after the arming
+  # ran out: then it does nothing.
+  def confirm({entity_id, action}, state, _deps, callbacks) do
+    case state.armed do
+      %{^entity_id => {^action, _ref}} ->
+        state = %{state | armed: Map.delete(state.armed, entity_id)}
+        start_call(Actions.lock(entity_id, action), state, callbacks)
+
+      _ ->
+        state
+    end
+  end
 
   def press({entity_id, long?}, state, _deps, callbacks, params) do
     es = with_pending(source(params).state.(entity_id), state.pending[entity_id])
@@ -113,27 +145,35 @@ defmodule PictureRail.App.HA do
     %{state | sliding: Map.put(state.sliding, key, value)}
   end
 
-  def handle_info({ref, result}, state, _deps, _callbacks) when is_reference(ref),
+  def handle_info({ref, result}, state, _deps, _callbacks, _params) when is_reference(ref),
     do: call_done(ref, result, state)
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, state, _deps, _callbacks),
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state, _deps, _callbacks, _params),
     do: call_done(ref, {:error, {:crashed, reason}}, state)
 
-  def handle_info({:expire, entity_id, ref}, state, _deps, _callbacks),
+  def handle_info({:expire, entity_id, ref}, state, _deps, _callbacks, _params),
     do: expire(entity_id, ref, state)
+
+  def handle_info({:disarm, entity_id, ref}, state, _deps, _callbacks, _params) do
+    case state.armed do
+      %{^entity_id => {_action, ^ref}} -> %{state | armed: Map.delete(state.armed, entity_id)}
+      _ -> state
+    end
+  end
 
   # Sent: from here on the value is held as an optimistic attribute until
   # Home Assistant reports it.
-  def handle_info({:slide_send, {entity_id, kind} = key}, state, _deps, callbacks) do
+  def handle_info({:slide_send, {entity_id, kind} = key}, state, _deps, callbacks, params) do
     {value, sliding} = Map.pop(state.sliding, key)
     state = %{state | sliding: sliding}
+    es = with_pending(source(params).state.(entity_id), state.pending[entity_id])
 
     if value == nil,
       do: state,
-      else: start_call(Actions.slider(entity_id, kind, value), state, callbacks)
+      else: start_call(Actions.slider(entity_id, kind, value, es), state, callbacks)
   end
 
-  def handle_info(_message, state, _deps, _callbacks), do: state
+  def handle_info(_message, state, _deps, _callbacks, _params), do: state
 
   defp open_detail(entity_id, state, callbacks) do
     callbacks.open.({:entity, entity_id})
@@ -153,15 +193,14 @@ defmodule PictureRail.App.HA do
       %{state | error: nil}
     else
       Process.send_after(self(), {:expire, request.entity_id, ref}, @optimistic_ms)
-      entry = %{state: optimistic, attrs: attrs, ref: ref}
-      pending = Map.put(state.pending, request.entity_id, entry)
+      pending = Pending.put(state.pending, request, ref)
       %{state | pending: pending, error: nil, tick: state.tick + 1}
     end
   end
 
   @doc false
-  # A finished call: success keeps the optimistic value until HA reports
-  # it; failure rolls it back.
+  # A finished call: success keeps its optimistic values until HA reports
+  # them; failure rolls back what it set.
   @spec call_done(reference(), term(), map()) :: map()
   def call_done(ref, result, state) do
     Process.demonitor(ref, [:flush])
@@ -172,18 +211,14 @@ defmodule PictureRail.App.HA do
 
       {:error, reason} ->
         Logger.warning("HA: service call failed: #{inspect(reason)}")
-        pending = state.pending |> Enum.reject(fn {_id, p} -> p.ref == ref end) |> Map.new()
-        %{state | pending: pending, error: reason, tick: state.tick + 1}
+        %{state | pending: Pending.drop(state.pending, ref), error: reason, tick: state.tick + 1}
     end
   end
 
   defp expire(entity_id, ref, state) do
-    case state.pending do
-      %{^entity_id => %{ref: ^ref}} ->
-        %{state | pending: Map.delete(state.pending, entity_id), tick: state.tick + 1}
-
-      _ ->
-        state
+    case Pending.expire(state.pending, entity_id, ref) do
+      same when same == state.pending -> state
+      pending -> %{state | pending: pending, tick: state.tick + 1}
     end
   end
 
@@ -191,37 +226,11 @@ defmodule PictureRail.App.HA do
   # report comes next: one from before the call, or from an earlier tap,
   # leaves it in place.
   defp settle(state, ids, src) do
-    pending =
-      Enum.reduce(ids, state.pending, fn id, pending ->
-        with %{^id => entry} <- pending, true <- reported?(src.state.(id), entry) do
-          Map.delete(pending, id)
-        else
-          _ -> pending
-        end
-      end)
-
+    pending = Enum.reduce(ids, state.pending, &Pending.settle(&2, &1, src.state.(&1)))
     %{state | pending: pending}
   end
 
-  @doc false
-  @spec reported?(Hassock.EntityState.t() | nil, map()) :: boolean()
-  def reported?(nil, _entry), do: false
-
-  def reported?(es, %{state: wanted, attrs: attrs}) do
-    (wanted == nil or es.state == wanted) and
-      Enum.all?(attrs, fn {key, value} -> close?(es.attributes[key], value) end)
-  end
-
-  # Home Assistant rounds (brightness 0-255 from a percentage, positions).
-  defp close?(a, b) when is_number(a) and is_number(b), do: abs(a - b) <= max(1.5, abs(b) * 0.02)
-  defp close?(a, b), do: a == b
-
-  defp with_pending(es, nil), do: es
-  defp with_pending(nil, _pending), do: nil
-
-  defp with_pending(es, %{state: wanted, attrs: attrs}) do
-    %{es | state: wanted || es.state, attributes: Map.merge(es.attributes || %{}, attrs)}
-  end
+  defp with_pending(es, entry), do: Pending.shown(es, entry)
 
   # -- The slice --
 
@@ -356,6 +365,7 @@ defmodule PictureRail.App.HA do
       slice: slice,
       states: states,
       sliders: state.sliding,
+      armed: Map.new(state.armed, fn {id, {action, _ref}} -> {id, action} end),
       names: names(ids, state, params),
       nav: if(visible?, do: nav(state, params), else: []),
       # only while the panel is up, so a refresh doesn't redraw the slideshow

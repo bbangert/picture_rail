@@ -206,8 +206,14 @@ defmodule PictureRail.HA.OverviewTest do
 
     assert Overview.available?(src.state.("light.ceiling"))
     refute Overview.available?(src.state.("switch.plug"))
-    refute Overview.available?(src.state.("scene.movie"))
+    refute Overview.available?(%{src.state.("light.ceiling") | state: "unknown"})
     refute Overview.available?(nil)
+  end
+
+  test "a scene never run (unknown) still works" do
+    src = HAFixture.source()
+    assert Overview.available?(src.state.("scene.movie"))
+    refute Overview.available?(%{src.state.("scene.movie") | state: "unavailable"})
   end
 
   test "a rebuilt model drops what's gone and keeps the revision current" do

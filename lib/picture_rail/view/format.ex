@@ -39,14 +39,15 @@ defmodule PictureRail.View.Format do
       |> Enum.join(" ")
 
   defp state("climate", %{state: mode, attributes: attrs}) do
+    mode = String.replace(mode, "_", " ")
     current = attrs["current_temperature"]
-    target = attrs["temperature"]
+    target = target(attrs)
 
     case {current, target} do
       {nil, nil} -> mode
-      {c, nil} -> "#{mode} #{number(c)}°"
-      {nil, t} -> "#{mode} › #{number(t)}°"
-      {c, t} -> "#{number(c)}° › #{number(t)}°"
+      {c, nil} -> "#{mode} #{temperature(c)}"
+      {nil, t} -> "#{mode} › #{t}"
+      {c, t} -> "#{temperature(c)} › #{t}"
     end
   end
 
@@ -83,6 +84,19 @@ defmodule PictureRail.View.Format do
 
   defp binary(class, "off") when class in ~w(moisture smoke gas carbon_monoxide safety), do: "ok"
   defp binary(_class, state), do: state
+
+  # one target, or a heat/cool range
+  defp target(%{"temperature" => t}) when is_number(t), do: temperature(t)
+
+  defp target(%{"target_temp_low" => low, "target_temp_high" => high})
+       when is_number(low) and is_number(high),
+       do: "#{number(low)}–#{temperature(high)}"
+
+  defp target(_attrs), do: nil
+
+  @doc "A temperature as the panel shows it: `21.5°`."
+  @spec temperature(number() | String.t()) :: String.t()
+  def temperature(value), do: number(value) <> "°"
 
   # "21.53" -> "21.5", "40.0" -> "40"; anything else unchanged.
   defp number(value) when is_number(value), do: number(to_string(value))

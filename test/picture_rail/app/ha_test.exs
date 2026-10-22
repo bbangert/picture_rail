@@ -3,7 +3,7 @@ defmodule PictureRail.App.HATest do
 
   alias Hassock.EntityState
   alias PictureRail.App.HA
-  alias PictureRail.HA.Overview
+  alias PictureRail.HA.{Actions, Overview}
   alias PictureRail.HAFixture
 
   # The source reads entity states from the test process, so a test can
@@ -19,7 +19,8 @@ defmodule PictureRail.App.HATest do
       pending: %{},
       error: nil,
       energy: nil,
-      sliding: %{}
+      sliding: %{},
+      armed: %{}
     }
 
     %{src: src, params: %{source: src}, state: state}
@@ -216,7 +217,7 @@ defmodule PictureRail.App.HATest do
 
     state = HA.press({"light.ceiling", false}, state, deps, callbacks(), params)
     assert_received {:called, %{entity_id: "light.ceiling", service: "turn_off"}}
-    assert state.pending["light.ceiling"].state == "off"
+    assert {"off", _ref} = state.pending["light.ceiling"].state
 
     # a tap again goes by what's shown (off, pending): on
     HA.press({"light.ceiling", false}, state, deps, callbacks(), params)
@@ -248,10 +249,190 @@ defmodule PictureRail.App.HATest do
     assert_receive {:slide_send, ^key}, 500
     refute_received {:slide_send, _}
 
-    state = HA.handle_info({:slide_send, key}, state, deps, callbacks())
+    state = HA.handle_info({:slide_send, key}, state, deps, callbacks(), params)
     assert_received {:called, %{service: "turn_on", data: %{brightness_pct: 55}}}
     assert HA.expose(state, deps, params).sliders == %{}
-    assert state.pending["light.ceiling"].attrs["brightness"] == round(55 * 255 / 100)
+    assert {140, _ref} = state.pending["light.ceiling"].attrs["brightness"]
+  end
+
+  test "unlocking takes a second press within 5 s; a call disarms", %{
+    state: state,
+    params: params
+  } do
+    deps = panel({:entity, "light.ceiling"})
+    state = HA.arm({"lock.door", :unlock}, state)
+    assert HA.expose(state, deps, params).armed == %{"lock.door" => :unlock}
+
+    # a disarm from an earlier arming is ignored
+    {_action, ref} = state.armed["lock.door"]
+    assert HA.handle_info({:disarm, "lock.door", make_ref()}, state, deps, %{}, params) == state
+    assert HA.handle_info({:disarm, "lock.door", ref}, state, deps, %{}, params).armed == %{}
+
+    request = %{domain: "lock", service: "unlock", entity_id: "lock.door", optimistic: "unlocked"}
+    state = HA.call(request, state, deps, callbacks())
+    assert_received {:called, %{service: "unlock"}}
+    assert state.armed == %{}
+  end
+
+  test "a colour slider sends the colour shown, with the other half kept", %{
+    state: state,
+    params: params
+  } do
+    report("light.ceiling", fn es ->
+      %{es | attributes: Map.put(es.attributes, "hs_color", [30.0, 64.0])}
+    end)
+
+    deps = panel({:entity, "light.ceiling"})
+    state = HA.slide({{"light.ceiling", :hue}, 200}, state, deps, callbacks())
+
+    state =
+      HA.handle_info({:slide_send, {"light.ceiling", :hue}}, state, deps, callbacks(), params)
+
+    assert_received {:called, %{data: %{hs_color: [200, 64.0]}}}
+
+    # saturation right after: the hue sent (pending) is kept, not HA's old one
+    state = HA.slide({{"light.ceiling", :saturation}, 20}, state, deps, callbacks())
+
+    HA.handle_info(
+      {:slide_send, {"light.ceiling", :saturation}},
+      state,
+      deps,
+      callbacks(),
+      params
+    )
+
+    assert_received {:called, %{data: %{hs_color: [200, 20]}}}
+  end
+
+  test "a confirm after the arming ran out does nothing", %{state: state, params: params} do
+    deps = panel({:entity, "light.ceiling"})
+    state = HA.arm({"lock.door", :unlock}, state)
+    {_action, ref} = state.armed["lock.door"]
+    disarmed = HA.handle_info({:disarm, "lock.door", ref}, state, deps, %{}, params)
+
+    assert HA.confirm({"lock.door", :unlock}, disarmed, deps, callbacks()) == disarmed
+    # nor does one for another action
+    assert HA.confirm({"lock.door", :open}, state, deps, callbacks()) == state
+    refute_received {:called, _}
+
+    state = HA.confirm({"lock.door", :unlock}, state, deps, callbacks())
+    assert_received {:called, %{domain: "lock", service: "unlock", entity_id: "lock.door"}}
+    assert state.armed == %{}
+  end
+
+  test "controls used one after another keep each other's pending values", %{
+    state: state,
+    params: params
+  } do
+    deps = panel({:entity, "light.ceiling"})
+
+    report("light.ceiling", fn es ->
+      %{es | attributes: Map.put(es.attributes, "hs_color", [30.0, 64.0])}
+    end)
+
+    send_slider = fn state, kind, value ->
+      state = HA.slide({{"light.ceiling", kind}, value}, state, deps, callbacks())
+      HA.handle_info({:slide_send, {"light.ceiling", kind}}, state, deps, callbacks(), params)
+    end
+
+    state = state |> send_slider.(:hue, 200) |> send_slider.(:brightness, 40)
+    send_slider.(state, :saturation, 20)
+    assert_received {:called, %{data: %{hs_color: [200, 20]}}}
+
+    # turning it off is a new state: what was pending for on goes
+    state =
+      HA.start_call(
+        %{domain: "light", service: "turn_off", entity_id: "light.ceiling", optimistic: "off"},
+        state,
+        callbacks()
+      )
+
+    assert state.pending["light.ceiling"].attrs == %{}
+  end
+
+  test "a failed call rolls back only what it set", %{state: state, params: params} do
+    deps = panel({:entity, "light.ceiling"})
+    hue = make_ref()
+    brightness = make_ref()
+
+    state =
+      Actions.color("light.ceiling", [200, 64])
+      |> HA.start_call(state, %{call_service: fn _ -> %{ref: hue} end})
+      |> then(
+        &HA.start_call(Actions.slider("light.ceiling", :brightness, 40), &1, %{
+          call_service: fn _ -> %{ref: brightness} end
+        })
+      )
+      |> then(&HA.call_done(hue, {:error, :timeout}, &1))
+
+    shown = HA.expose(state, deps, params).states["light.ceiling"]
+    refute shown.attributes["hs_color"] == [200, 64]
+    assert shown.attributes["brightness"] == 102
+
+    # and HA reporting the brightness ends it, with no failed hue in the way
+    report(
+      "light.ceiling",
+      &%{&1 | state: "on", attributes: Map.put(&1.attributes, "brightness", 102)}
+    )
+
+    assert HA.states(["light.ceiling"], state, deps, %{}, params).pending == %{}
+  end
+
+  test "a colour settles around the hue circle", %{state: state, params: params} do
+    deps = panel({:entity, "light.ceiling"})
+    callbacks = %{call_service: fn _ -> %{ref: make_ref()} end}
+
+    for {sent, reported} <- [
+          {[360, 80], [0.0, 80.0]},
+          {[359, 80], [1.0, 80.0]},
+          {[2, 80], [358.5, 80.0]},
+          {[200, 0], [0.0, 0.0]}
+        ] do
+      state = HA.start_call(Actions.color("light.ceiling", sent), state, callbacks)
+
+      report("light.ceiling", fn es ->
+        %{es | state: "on", attributes: Map.put(es.attributes, "hs_color", reported)}
+      end)
+
+      assert HA.states(["light.ceiling"], state, deps, %{}, params).pending == %{}
+    end
+
+    # a different colour doesn't
+    state = HA.start_call(Actions.color("light.ceiling", [180, 80]), state, callbacks)
+    report("light.ceiling", &%{&1 | attributes: Map.put(&1.attributes, "hs_color", [10.0, 80.0])})
+    refute HA.states(["light.ceiling"], state, deps, %{}, params).pending == %{}
+  end
+
+  test "a setpoint settles only when HA reports it exactly", %{state: state, params: params} do
+    deps = panel({:entity, "climate.hall"})
+
+    request = %{
+      domain: "climate",
+      service: "set_temperature",
+      entity_id: "climate.hall",
+      data: %{target_temp_low: 69, target_temp_high: 76},
+      optimistic_attrs: %{"target_temp_low" => 69, "target_temp_high" => 76}
+    }
+
+    state = HA.start_call(request, state, %{call_service: fn _ -> %{ref: make_ref()} end})
+
+    set = fn low ->
+      &%{
+        &1
+        | attributes:
+            Map.merge(&1.attributes, %{"target_temp_low" => low, "target_temp_high" => 76})
+      }
+    end
+
+    # one degree off is the old value, not HA's rounding
+    report("climate.hall", set.(68))
+    state = HA.states(["climate.hall"], state, deps, %{}, params)
+
+    assert HA.expose(state, deps, params).states["climate.hall"].attributes["target_temp_low"] ==
+             69
+
+    report("climate.hall", set.(69))
+    assert HA.states(["climate.hall"], state, deps, %{}, params).pending == %{}
   end
 
   test "slice ids cover summaries, sections, badges and readouts", %{src: src} do

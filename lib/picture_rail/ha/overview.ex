@@ -474,8 +474,16 @@ defmodule PictureRail.HA.Overview do
 
   defp sort_by_name(ids, src), do: Enum.sort_by(ids, &String.downcase(name(src, &1)))
 
-  @doc "Whether an entity is usable: it has a state that isn't unavailable or unknown."
+  # Never pressed, run or set, these say "unknown", and still work (as in
+  # Home Assistant's own rows).
+  @stateless ~w(button input_button scene script siren select)
+
+  @doc """
+  Whether an entity is usable: it has a state that isn't unavailable or
+  unknown (unknown is fine for what has no state until it's used).
+  """
   @spec available?(Hassock.EntityState.t() | nil) :: boolean()
+  def available?(%{entity_id: id, state: "unknown"}), do: Index.domain(id) in @stateless
   def available?(%{state: state}), do: state not in ["unavailable", "unknown"]
   def available?(nil), do: false
 
