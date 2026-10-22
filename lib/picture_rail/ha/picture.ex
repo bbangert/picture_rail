@@ -88,20 +88,31 @@ defmodule PictureRail.HA.Picture do
     :ok
   end
 
-  defp download(url, ha, entity_id) do
+  @doc false
+  # Download `url` to a new file named for `entity_id`. HA's own server
+  # gets the token, and a request carrying it doesn't follow redirects
+  # (nothing it serves pictures from redirects; a redirect would take the
+  # token along). `req_options` are for tests (`plug:`).
+  @spec download(String.t(), Settings.HomeAssistant.t(), String.t(), keyword()) ::
+          {:ok, Path.t()} | {:error, term()}
+  def download(url, ha, entity_id, req_options \\ []) do
     File.mkdir_p!(dir())
     name = Path.join(dir(), "#{entity_id}-#{System.unique_integer([:positive])}")
     tmp = name <> ".part"
-    headers = if own_server?(url, ha.url), do: [authorization: "Bearer " <> ha.token], else: []
+    own? = own_server?(url, ha.url)
 
     result =
-      Req.get(url,
-        headers: headers,
-        into: File.stream!(tmp),
-        decode_body: false,
-        receive_timeout: 10_000,
-        retry: false,
-        connect_options: [timeout: 10_000] ++ ssl(url, ha)
+      Req.get(
+        url,
+        [
+          headers: if(own?, do: [authorization: "Bearer " <> ha.token], else: []),
+          redirect: not own?,
+          into: File.stream!(tmp),
+          decode_body: false,
+          receive_timeout: 10_000,
+          retry: false,
+          connect_options: [timeout: 10_000] ++ ssl(url, ha)
+        ] ++ req_options
       )
 
     case result do

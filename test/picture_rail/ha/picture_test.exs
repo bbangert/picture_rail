@@ -43,6 +43,83 @@ defmodule PictureRail.HA.PictureTest do
     assert Picture.url(nil, @base) == nil
   end
 
+  describe "downloads" do
+    @ha %PictureRail.Settings.HomeAssistant{url: "http://ha.local:8123", token: "secret-token"}
+
+    setup do
+      %{stub: :"picture_#{System.unique_integer([:positive])}"}
+    end
+
+    # the files a download for `name` left in the directory
+    defp files(name),
+      do: Picture.dir() |> File.ls!() |> Enum.filter(&String.starts_with?(&1, name <> "-"))
+
+    defp download(stub, url, name),
+      do: Picture.download(url, @ha, name, plug: {Req.Test, stub})
+
+    test "HA's own server gets the token; the picture lands in a new file", %{stub: stub} do
+      Req.Test.stub(stub, fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer secret-token"]
+        assert conn.request_path == "/api/camera_proxy/camera.door"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("image/png")
+        |> Plug.Conn.send_resp(200, "PNGDATA")
+      end)
+
+      assert {:ok, path} =
+               download(
+                 stub,
+                 "http://ha.local:8123/api/camera_proxy/camera.door?token=t",
+                 "test.own"
+               )
+
+      assert Path.extname(path) == ".png"
+      assert File.read!(path) == "PNGDATA"
+      assert files("test.own") == [Path.basename(path)]
+      Picture.discard(path)
+    end
+
+    test "another server never gets it", %{stub: stub} do
+      Req.Test.stub(stub, fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == []
+        Plug.Conn.send_resp(conn, 200, "JPEG")
+      end)
+
+      assert {:ok, path} = download(stub, "http://192.168.2.186:11000/art.jpg", "test.other")
+      assert Path.extname(path) == ".jpg"
+      Picture.discard(path)
+    end
+
+    test "a request with the token doesn't follow a redirect", %{stub: stub} do
+      Req.Test.stub(stub, fn conn ->
+        assert conn.host == "ha.local"
+
+        conn
+        |> Plug.Conn.put_resp_header("location", "http://elsewhere.example/steal")
+        |> Plug.Conn.send_resp(302, "")
+      end)
+
+      assert {:error, {:status, 302}} =
+               download(stub, "http://ha.local:8123/api/image_proxy/image.porch", "test.redirect")
+
+      assert files("test.redirect") == []
+    end
+
+    test "a failed download leaves no file", %{stub: stub} do
+      Req.Test.stub(stub, &Plug.Conn.send_resp(&1, 500, "oops"))
+      assert {:error, {:status, 500}} = download(stub, "http://ha.local:8123/x", "test.status")
+      assert files("test.status") == []
+
+      Req.Test.stub(stub, &Req.Test.transport_error(&1, :econnrefused))
+
+      assert {:error, %Req.TransportError{}} =
+               download(stub, "http://ha.local:8123/x", "test.transport")
+
+      assert files("test.transport") == []
+    end
+  end
+
   test "only files in its own directory are removed" do
     outside = Path.join(System.tmp_dir!(), "picture-test-#{System.unique_integer([:positive])}")
     File.write!(outside, "x")
