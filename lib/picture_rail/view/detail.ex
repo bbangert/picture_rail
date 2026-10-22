@@ -390,13 +390,12 @@ defmodule PictureRail.View.Detail do
   # Players of the same integration that can join this one's group: the
   # ones in it bright; a press puts one in or takes it out.
   defp group(ctx, es) do
-    case Map.get(ctx.ha, :slice) do
-      %{group: [_ | _] = others} ->
-        heading = {:heading, ctx.color, "Group"}
-        [heading | group_rows(ctx, es, others, heading)]
-
-      _ ->
-        []
+    with %{group: others} <- Map.get(ctx.ha, :slice),
+         heading = {:heading, ctx.color, "Group"},
+         [_ | _] = rows <- group_rows(ctx, es, others, heading) do
+      [heading | rows]
+    else
+      _ -> []
     end
   end
 
@@ -406,6 +405,7 @@ defmodule PictureRail.View.Detail do
     w = Float.floor((ctx.detail_w - (cols - 1) * @gap) / cols)
 
     others
+    |> Enum.filter(&Features.has?(ctx.ha.states[&1], :grouping))
     |> Enum.map(fn other -> fn -> group_pill(ctx, es, other, other in members, w) end end)
     |> Enum.chunk_every(cols)
     |> Enum.map(&{:row, Theme.size(:pill), &1, heading})
@@ -431,10 +431,16 @@ defmodule PictureRail.View.Detail do
     key = &button(ctx, &1, call(ctx, Actions.command(ctx.id, Map.fetch!(pad, &2))), true)
     blank = el([width(px(@button_w)), height(px(Theme.size(:pill)))], none())
 
+    # one toggle where the integration has it, else Play and Pause
+    last =
+      if Map.has_key?(pad, :play_pause),
+        do: [key.("Play/Pause", :play_pause), key.("Down", :down), blank],
+        else: [key.("Play", :play), key.("Down", :down), key.("Pause", :pause)]
+
     rows = [
       [key.("Back", :back), key.("Up", :up), key.("Home", :home)],
       [key.("Left", :left), key.("OK", :select), key.("Right", :right)],
-      [key.("Play/Pause", :play), key.("Down", :down), blank]
+      last
     ]
 
     [heading | Enum.map(rows, &{:row, Theme.size(:pill), &1, heading})]
@@ -450,12 +456,13 @@ defmodule PictureRail.View.Detail do
     end
   end
 
-  # The picture over the one before it, which shows while it loads (a
-  # refresh doesn't blink). Emerge draws a loaded image at its next frame,
-  # but a fixed-size element's load doesn't bring one about by itself (it
-  # only relayouts, and nothing moves), so the new picture, keyed by its
-  # file, enters with an invisible animation that draws frames while it
-  # loads (0.4 s: a snapshot decodes in less), as the photos' crossfade does.
+  # The picture fades in over the one before it, on its own black layer
+  # (keyed by its file), as the photos do: a refresh doesn't blink, and
+  # nothing of the old picture shows in the new one's letterbox bars or
+  # through its transparency. The fade also matters to Emerge: it draws a
+  # loaded image at its next frame, but a fixed-size element's load
+  # doesn't bring one about by itself (it only relayouts, and nothing
+  # moves); the fade draws frames for 0.4 s, and a snapshot decodes in less.
   defp picture_el(ctx, path, w, h) do
     under =
       case Map.get(ctx.pictures, :previous) do
@@ -470,14 +477,13 @@ defmodule PictureRail.View.Detail do
           key({:picture, path}),
           width(fill()),
           height(fill()),
-          Background.image({:path, path}, fit: :contain),
-          Animation.animate_enter(
-            [[Transform.alpha(0.99)], [Transform.alpha(1.0)]],
-            400,
-            :linear
-          )
+          Background.color(Theme.color(:black)),
+          Animation.animate_enter([[Transform.alpha(0.0)], [Transform.alpha(1.0)]], 400, :linear)
         ],
-        none()
+        el(
+          [width(fill()), height(fill()), Background.image({:path, path}, fit: :contain)],
+          none()
+        )
       )
     )
   end

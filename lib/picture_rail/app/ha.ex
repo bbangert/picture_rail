@@ -277,8 +277,10 @@ defmodule PictureRail.App.HA do
   end
 
   # An entity's detail: its integration (a remote's commands go by it) and,
-  # for a player that groups, the players of its integration it can group
-  # with (on screen too, so their names and states are in `states`).
+  # for a player that groups, the other players of its integration. They
+  # are on screen (in `states`, and their changes tick), and the view
+  # keeps those that can group: whether one can is in its state, which
+  # changes without a new revision.
   defp entity_slice(entity, src) do
     platform = entity.entry && entity.entry.platform
     %{entity_id: entity.id, platform: platform, group: group_candidates(entity, platform, src)}
@@ -289,8 +291,7 @@ defmodule PictureRail.App.HA do
       for other <- Model.entity_ids(src.table),
           other != id,
           String.starts_with?(other, "media_player."),
-          match?(%{entry: %{platform: ^platform}}, Model.entity(other, src.table)),
-          Features.has?(src.state.(other), :grouping) do
+          match?(%{entry: %{platform: ^platform}}, Model.entity(other, src.table)) do
         other
       end
       |> Enum.sort_by(&String.downcase(Overview.name(src, &1, :full)))

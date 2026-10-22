@@ -27,6 +27,16 @@ defmodule PictureRail.HA.PictureTest do
     refute Picture.own_server?("https://ha.local:8123/x", @base)
   end
 
+  test "an image is its URL and when it changed; anything else its URL" do
+    image = %EntityState{entity_id: "image.porch", state: "2026-10-21T19:08:34", attributes: %{}}
+    assert Picture.version(image, "u") == "u#2026-10-21T19:08:34"
+
+    refute Picture.version(%{image | state: "2026-10-21T19:09:00"}, "u") ==
+             Picture.version(image, "u")
+
+    assert Picture.version(es("x"), "u") == "u"
+  end
+
   test "no picture: nil" do
     assert Picture.url(es(nil), @base) == nil
     assert Picture.url(es(""), @base) == nil

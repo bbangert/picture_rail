@@ -82,6 +82,28 @@ defmodule PictureRail.App.PicturesTest do
     refute_received {:fetch, _, _, _}
   end
 
+  test "a picture that's gone (a track without artwork) is removed, not kept" do
+    state = Pictures.view({:entity, "media_player.tv"}, Pictures.init(nil, %{}), %{}, callbacks())
+    {state, _ref} = fetched(state, {:ok, "/pics/art-1.png", "v1"})
+    state = Pictures.handle_info({:refresh, state.timer}, state, %{}, callbacks())
+    {state, _ref} = fetched(state, {:ok, "/pics/art-2.png", "v2"})
+
+    state = Pictures.handle_info({:refresh, state.timer}, state, %{}, callbacks())
+    {state, _ref} = fetched(state, :none)
+    assert_received {:discard, "/pics/art-1.png"}
+    assert_received {:discard, "/pics/art-2.png"}
+
+    assert Pictures.expose(state, %{}, nil) == %{
+             entity_id: "media_player.tv",
+             path: nil,
+             previous: nil
+           }
+
+    # and the next artwork is fetched as new
+    Pictures.handle_info({:refresh, state.timer}, state, %{}, callbacks())
+    assert_received {:fetch, "media_player.tv", nil, _}
+  end
+
   test "only cameras, images and media players; the same view again is nothing new" do
     state = Pictures.view({:entity, "light.hall"}, Pictures.init(nil, %{}), %{}, callbacks())
     assert Pictures.expose(state, %{}, nil).entity_id == nil

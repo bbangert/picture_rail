@@ -384,7 +384,7 @@ defmodule PictureRail.HA.Actions do
   # -- Remotes --
 
   # A remote's navigation commands, by integration: the D-pad, back,
-  # home, play/pause.
+  # home, and play/pause as one toggle or as play and pause.
   @pads %{
     "apple_tv" => %{
       up: "up",
@@ -394,7 +394,7 @@ defmodule PictureRail.HA.Actions do
       select: "select",
       back: "menu",
       home: "home",
-      play: "play_pause"
+      play_pause: "play_pause"
     },
     "braviatv" => %{
       up: "Up",
@@ -404,7 +404,8 @@ defmodule PictureRail.HA.Actions do
       select: "Confirm",
       back: "Return",
       home: "Home",
-      play: "Play"
+      play: "Play",
+      pause: "Pause"
     }
   }
 

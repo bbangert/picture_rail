@@ -211,6 +211,14 @@ defmodule PictureRail.View.DetailTest do
 
     assert text =~ "\"ON\""
     refute text =~ "\"OK\""
+
+    # Bravia has no toggle: Play and Pause
+    text =
+      remote |> blocks(%{slice: %{entity_id: "remote.loft", platform: "braviatv"}}) |> shown()
+
+    assert text =~ "\"PLAY\""
+    assert text =~ "\"PAUSE\""
+    refute text =~ "PLAY/PAUSE"
   end
 
   test "a camera: its snapshot once downloaded" do
@@ -248,17 +256,21 @@ defmodule PictureRail.View.DetailTest do
       ha: %{
         states: %{
           "media_player.kitchen" => kitchen,
-          "media_player.office" => es("media_player.office", "playing", %{}),
-          "media_player.den" => es("media_player.den", "unavailable", %{})
+          "media_player.office" =>
+            es("media_player.office", "playing", %{"supported_features" => 524_288}),
+          "media_player.den" =>
+            es("media_player.den", "unavailable", %{"supported_features" => 524_288}),
+          "media_player.attic" => es("media_player.attic", "idle", %{"supported_features" => 0})
         },
         names: %{
           {"media_player.office", :full} => "Office speaker",
-          {"media_player.den", :full} => "Den speaker"
+          {"media_player.den", :full} => "Den speaker",
+          {"media_player.attic", :full} => "Attic speaker"
         },
         slice: %{
           entity_id: "media_player.kitchen",
           platform: "music_assistant",
-          group: ["media_player.den", "media_player.office"]
+          group: ["media_player.attic", "media_player.den", "media_player.office"]
         },
         sliders: %{},
         armed: %{}
@@ -275,6 +287,13 @@ defmodule PictureRail.View.DetailTest do
     assert text =~ "\"Group\""
     assert text =~ "\"OFFICE SPEAKER\""
     assert text =~ "\"DEN SPEAKER\""
+    # one that can't group isn't offered
+    refute text =~ "ATTIC SPEAKER"
+  end
+
+  test "an image not loaded yet says so, not LATEST" do
+    assert [{:heading, _, "UNKNOWN"}] = blocks(es("image.porch", "unknown", %{}))
+    assert [{:heading, _, "LATEST"} | _] = blocks(es("image.porch", "2026-10-21T19:08:34", %{}))
   end
 
   test "unusable: just the state" do

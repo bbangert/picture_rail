@@ -479,12 +479,13 @@ defmodule PictureRail.App.HATest do
 
     exposed = HA.expose(state, panel({:entity, "media_player.kitchen"}), params)
 
-    assert %{platform: "music_assistant", group: ["media_player.office"]} = exposed.slice
+    # every player of the integration (the view keeps those that group:
+    # a player's state says so, and it's on screen, so a change shows)
+    assert %{platform: "music_assistant", group: ["media_player.attic", "media_player.office"]} =
+             exposed.slice
 
-    assert Map.keys(exposed.states) |> Enum.sort() == [
-             "media_player.kitchen",
-             "media_player.office"
-           ]
+    assert Map.keys(exposed.states) |> Enum.sort() ==
+             ["media_player.attic", "media_player.kitchen", "media_player.office"]
 
     # one that doesn't group: none
     assert %{platform: "music_assistant", group: []} =

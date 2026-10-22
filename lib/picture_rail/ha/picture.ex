@@ -21,27 +21,40 @@ defmodule PictureRail.HA.Picture do
   def dir, do: Path.join([Paths.data_dir(), "cache", "ha"])
 
   @doc """
-  Download `entity_id`'s picture, unless it's still at `last_url` (a
-  camera's snapshot always is downloaded: the same URL gives a new one).
+  Download `entity_id`'s picture, unless it's still the one `last`
+  identifies (`version/2`; a camera's snapshot is always downloaded: the
+  same URL gives a new one). `:none` when the entity has no picture now
+  (a track without artwork), or Home Assistant isn't set up.
   """
   @spec fetch(String.t(), String.t() | nil) ::
-          {:ok, Path.t(), String.t()} | :unchanged | {:error, term()}
-  def fetch(entity_id, last_url) do
+          {:ok, Path.t(), String.t()} | :unchanged | :none | {:error, term()}
+  def fetch(entity_id, last) do
+    es = Model.state(entity_id)
+
     with %Settings.HomeAssistant{} = ha <- Settings.current().home_assistant,
-         url when is_binary(url) <- url(Model.state(entity_id), ha.url) do
-      fetch(entity_id, url, last_url, ha)
+         url when is_binary(url) <- url(es, ha.url) do
+      fetch(entity_id, url, version(es, url), last, ha)
     else
-      nil -> {:error, :no_picture}
+      nil -> :none
     end
   end
 
-  defp fetch(entity_id, url, last_url, ha) do
-    if url == last_url and Index.domain(entity_id) != "camera" do
+  defp fetch(entity_id, url, version, last, ha) do
+    if version == last and Index.domain(entity_id) != "camera" do
       :unchanged
     else
-      with {:ok, path} <- download(url, ha, entity_id), do: {:ok, path, url}
+      with {:ok, path} <- download(url, ha, entity_id), do: {:ok, path, version}
     end
   end
+
+  @doc """
+  What identifies the picture now: its URL, and for an image entity also
+  its state (when the image last changed), as it may change behind the
+  same URL.
+  """
+  @spec version(Hassock.EntityState.t(), String.t()) :: String.t()
+  def version(%{entity_id: "image." <> _, state: state}, url), do: url <> "#" <> state
+  def version(_es, url), do: url
 
   @doc "The URL of an entity's picture (HA's paths against `base`), or `nil`."
   @spec url(Hassock.EntityState.t() | nil, String.t()) :: String.t() | nil

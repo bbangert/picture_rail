@@ -204,8 +204,11 @@ defmodule PictureRail.HA.ActionsTest do
   end
 
   test "remote commands by integration" do
-    assert %{select: "select", back: "menu"} = Actions.pad("apple_tv")
-    assert %{select: "Confirm", back: "Return"} = Actions.pad("braviatv")
+    assert %{select: "select", back: "menu", play_pause: "play_pause"} = Actions.pad("apple_tv")
+
+    assert %{select: "Confirm", back: "Return", play: "Play", pause: "Pause"} =
+             Actions.pad("braviatv")
+
     assert Actions.pad("broadlink") == nil
     assert Actions.pad(nil) == nil
 

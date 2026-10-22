@@ -99,9 +99,9 @@ defmodule PictureRail.App do
   end
 
   # Runs from the `:pictures` controller, which gets the task's reply.
-  defp fetch_picture(entity_id, last_url) do
+  defp fetch_picture(entity_id, last) do
     Task.Supervisor.async_nolink(PictureRail.TaskSup, fn ->
-      Picture.fetch(entity_id, last_url)
+      Picture.fetch(entity_id, last)
     end)
   end
 

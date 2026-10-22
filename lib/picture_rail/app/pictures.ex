@@ -14,7 +14,8 @@ defmodule PictureRail.App.Pictures do
   current one is kept too (`previous`): the view draws it under the new
   one while that loads. Older pictures, and any that come for an entity
   no longer shown, are removed (the `:discard` callback). A failed
-  download keeps the last picture.
+  download keeps the last picture; an entity that has no picture any
+  more (a track without artwork) shows none.
 
   Exposes `%{entity_id: id | nil, path: path | nil, previous: path | nil}`.
   """
@@ -29,9 +30,10 @@ defmodule PictureRail.App.Pictures do
   @impl Solve.Controller
   def init(_params, _dependencies), do: fresh(nil)
 
+  # `version`: what the picture is (`PictureRail.HA.Picture.version/2`);
   # `ref`: the download running; `timer`: the next one's token
   defp fresh(entity_id),
-    do: %{entity_id: entity_id, url: nil, path: nil, previous: nil, ref: nil, timer: nil}
+    do: %{entity_id: entity_id, version: nil, path: nil, previous: nil, ref: nil, timer: nil}
 
   def view(view, state, _deps, callbacks) do
     case shown(view) do
@@ -59,7 +61,7 @@ defmodule PictureRail.App.Pictures do
   # from a download for an entity no longer shown
   def handle_info({ref, result}, state, _deps, callbacks) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
-    with {:ok, path, _url} <- result, do: callbacks.discard.(path)
+    with {:ok, path, _version} <- result, do: callbacks.discard.(path)
     state
   end
 
@@ -72,13 +74,18 @@ defmodule PictureRail.App.Pictures do
   def handle_info(_message, state, _deps, _callbacks), do: state
 
   defp fetch(state, callbacks) do
-    %{ref: ref} = callbacks.fetch.(state.entity_id, state.url)
+    %{ref: ref} = callbacks.fetch.(state.entity_id, state.version)
     %{state | ref: ref}
   end
 
-  defp fetched(state, {:ok, path, url}, callbacks) do
+  defp fetched(state, {:ok, path, version}, callbacks) do
     callbacks.discard.(state.previous)
-    %{state | previous: state.path, path: path, url: url}
+    %{state | previous: state.path, path: path, version: version}
+  end
+
+  defp fetched(state, :none, callbacks) do
+    discard_all(state, callbacks)
+    %{state | path: nil, previous: nil, version: nil}
   end
 
   defp fetched(state, _unchanged_or_error, _callbacks), do: state
