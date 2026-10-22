@@ -266,6 +266,69 @@ defmodule PictureRail.Immich.CacheTest do
     assert File.exists?(path)
   end
 
+  # ids of the photos on disk, and of those the pass has taken (seen.log)
+  defp on_disk(dir),
+    do:
+      dir
+      |> Path.join("*.jpg")
+      |> Path.wildcard()
+      |> MapSet.new(&(&1 |> Path.basename() |> String.split("-") |> hd()))
+
+  defp seen(dir) do
+    dir
+    |> Path.join("seen.log")
+    |> File.read!()
+    |> String.split("\n", trim: true)
+    |> MapSet.new(&(&1 |> String.split("\t") |> hd()))
+  end
+
+  test "a restart carries on with the photos the pass hasn't shown", %{tmp_dir: dir} do
+    agent = Fake.start(Enum.map(1..8, &asset/1))
+    {_pid, cache} = start_cache(agent, dir, window: 2)
+    wait_ready(2)
+
+    for _ <- 1..2 do
+      {:ok, _} = Cache.next(cache)
+      wait_ready(2)
+    end
+
+    taken = seen(dir)
+    assert MapSet.size(taken) == 4
+    stop_supervised!(cache)
+
+    {_pid, cache} = start_cache(agent, dir, window: 2)
+    await_stats(&(&1.status == :online))
+
+    # every photo downloaded from here is one the pass hadn't taken
+    downloaded =
+      Enum.reduce(1..3, MapSet.new(), fn _, downloaded ->
+        before = on_disk(dir)
+        {:ok, _} = Cache.next(cache)
+        wait_ready(2)
+        MapSet.union(downloaded, MapSet.difference(on_disk(dir), before))
+      end)
+
+    assert MapSet.size(downloaded) > 0
+    assert MapSet.disjoint?(downloaded, taken)
+  end
+
+  test "a pass shows every photo, then a new one starts", %{tmp_dir: dir} do
+    agent = Fake.start(Enum.map(1..4, &asset/1))
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    wait_ready(1)
+
+    shown =
+      for _ <- 1..4 do
+        {:ok, entry} = Cache.next(cache)
+        wait_ready(1)
+        entry.asset.id
+      end
+
+    assert Enum.sort(shown) == ["p1", "p2", "p3", "p4"]
+    # the next pass has begun: the log holds only its photos
+    assert MapSet.size(seen(dir)) < 4
+  end
+
   test "albums are re-listed only when they change; removed photos go", %{tmp_dir: dir} do
     agent = Fake.start(Enum.map(1..3, &asset/1))
     test = self()
@@ -282,6 +345,8 @@ defmodule PictureRail.Immich.CacheTest do
     await_stats(&(&1.photos == 2))
     assert Fake.calls(agent, :list_images) == 2
     assert jpgs(dir) == 2
+    # a photo that's gone isn't remembered as seen
+    refute MapSet.member?(seen(dir), "p3")
   end
 
   test "a photo removed from the album while on screen doesn't come round again",
