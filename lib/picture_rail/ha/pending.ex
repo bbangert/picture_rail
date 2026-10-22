@@ -10,7 +10,8 @@ defmodule PictureRail.HA.Pending do
   brightness), unless the later call replaces it:
 
     * a different state ends every pending attribute (off after a
-      brightness);
+      brightness), also once the state they were set under (`under`) is
+      reported and only they are left;
     * a request's `supersedes` lists attributes it makes obsolete (a
       colour ends a pending colour temperature, a mode its old setpoints).
 
@@ -18,7 +19,11 @@ defmodule PictureRail.HA.Pending do
   """
 
   @type ref :: reference()
-  @type entry :: %{state: {String.t(), ref()} | nil, attrs: %{String.t() => {term(), ref()}}}
+  @type entry :: %{
+          state: {String.t(), ref()} | nil,
+          attrs: %{String.t() => {term(), ref()}},
+          under: String.t() | nil
+        }
   @type t :: %{String.t() => entry()}
 
   # A thermostat's setpoints come back as sent, and a step can be 0.5.
@@ -28,13 +33,12 @@ defmodule PictureRail.HA.Pending do
   @spec put(t(), map(), ref()) :: t()
   def put(pending, request, ref) do
     wanted = Map.get(request, :optimistic)
-    entry = Map.get(pending, request.entity_id, %{state: nil, attrs: %{}})
+    entry = Map.get(pending, request.entity_id, %{state: nil, attrs: %{}, under: nil})
 
     attrs =
-      case entry.state do
-        {old, _ref} when wanted != nil and old != wanted -> %{}
-        _ -> Map.drop(entry.attrs, Map.get(request, :supersedes, []))
-      end
+      if wanted != nil and entry.under not in [nil, wanted],
+        do: %{},
+        else: Map.drop(entry.attrs, Map.get(request, :supersedes, []))
 
     attrs =
       for {key, value} <- Map.get(request, :optimistic_attrs, %{}),
@@ -42,7 +46,7 @@ defmodule PictureRail.HA.Pending do
           do: {key, {value, ref}}
 
     state = if wanted == nil, do: entry.state, else: {wanted, ref}
-    store(pending, request.entity_id, %{state: state, attrs: attrs})
+    store(pending, request.entity_id, %{state: state, attrs: attrs, under: wanted || entry.under})
   end
 
   @doc "End what Home Assistant now reports for `entity_id` (`es`)."
@@ -68,7 +72,7 @@ defmodule PictureRail.HA.Pending do
       |> Enum.reject(fn {key, {value, _ref}} -> close?(key, es.attributes[key], value) end)
       |> Map.new()
 
-    %{state: state, attrs: attrs}
+    %{entry | state: state, attrs: attrs}
   end
 
   @doc "End what a call set, everywhere (it failed)."
@@ -103,8 +107,9 @@ defmodule PictureRail.HA.Pending do
     state = with {_wanted, ^ref} <- entry.state, do: nil
 
     %{
-      state: state,
-      attrs: entry.attrs |> Enum.reject(fn {_key, {_value, r}} -> r == ref end) |> Map.new()
+      entry
+      | state: state,
+        attrs: entry.attrs |> Enum.reject(fn {_key, {_value, r}} -> r == ref end) |> Map.new()
     }
   end
 

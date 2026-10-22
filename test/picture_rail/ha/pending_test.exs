@@ -78,6 +78,29 @@ defmodule PictureRail.HA.PendingTest do
     assert attrs == %{}
   end
 
+  test "off ends what was pending for on, also once on is reported" do
+    pending = put(%{}, Actions.color("light.a", [200, 64]))
+
+    # HA has turned it on, the colour isn't there yet
+    pending =
+      Pending.settle(pending, "light.a", es("light.a", "on", %{"hs_color" => [30.0, 64.0]}))
+
+    assert %{state: nil, attrs: %{"hs_color" => _}} = pending["light.a"]
+
+    off = %{domain: "light", service: "turn_off", entity_id: "light.a", optimistic: "off"}
+    assert %{state: {"off", _}, attrs: attrs} = put(pending, off)["light.a"]
+    assert attrs == %{}
+  end
+
+  test "a colour temperature after off turns it on" do
+    off = %{domain: "light", service: "turn_off", entity_id: "light.a", optimistic: "off"}
+    pending = %{} |> put(off) |> put(Actions.slider("light.a", :color_temp, 2700))
+    assert %{state: {"on", _}} = pending["light.a"]
+
+    report = es("light.a", "on", %{"color_temp_kelvin" => 2702})
+    assert Pending.settle(pending, "light.a", report) == %{}
+  end
+
   test "a failure or an expiry ends only its own call's values" do
     first = make_ref()
     second = make_ref()

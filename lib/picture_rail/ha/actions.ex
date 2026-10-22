@@ -79,6 +79,7 @@ defmodule PictureRail.HA.Actions do
       service: "turn_on",
       entity_id: id,
       data: %{color_temp_kelvin: round(v)},
+      optimistic: "on",
       optimistic_attrs: %{"color_temp_kelvin" => round(v)},
       supersedes: ["hs_color"]
     }
