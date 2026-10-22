@@ -97,6 +97,11 @@ defmodule PictureRail.Immich.CacheTest do
 
     @impl true
     def download_preview(agent, id, path) do
+      case Agent.get(agent, &Map.get(&1, :download_gate)) do
+        nil -> :ok
+        gate -> wait(gate)
+      end
+
       result = call(agent, :download, fn s -> Map.get(s.formats, id, :ok) end)
       if result == :ok, do: File.write!(path, <<0xFF, 0xD8, 0xFF, "photo ", id::binary>>)
       result
@@ -340,6 +345,36 @@ defmodule PictureRail.Immich.CacheTest do
     assert poll(fn -> Cache.stats(cache).ready == 1 end)
     assert {:ok, %{asset: %{id: next}}} = Cache.next(cache)
     refute next == on_disk
+  end
+
+  test "a photo whose download a restart cut short stays in the pass", %{tmp_dir: dir} do
+    agent = Fake.start(Enum.map(1..3, &asset/1))
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    wait_ready(1)
+
+    gate = Fake.gate()
+    Fake.set(agent, &Map.put(&1, :download_gate, gate))
+    {:ok, %{asset: %{id: first}}} = Cache.next(cache)
+    assert_receive :gate_waiting, 1_000
+
+    # the download in flight isn't seen yet
+    assert seen(dir) == MapSet.new([first])
+    stop_supervised!(cache)
+    Fake.set(agent, &Map.delete(&1, :download_gate))
+
+    # after the restart, the two photos not shown yet come before any repeat
+    {_pid, cache} = start_cache(agent, dir, window: 1)
+    await_stats(&(&1.status == :online))
+    assert {:ok, %{asset: %{id: ^first}}} = Cache.next(cache)
+
+    rest =
+      for _ <- 1..2 do
+        assert poll(fn -> Cache.stats(cache).ready == 1 end)
+        {:ok, %{asset: %{id: id}}} = Cache.next(cache)
+        id
+      end
+
+    assert Enum.sort(rest) == ["p1", "p2", "p3"] -- [first]
   end
 
   test "a pass shows every photo, then a new one starts", %{tmp_dir: dir} do

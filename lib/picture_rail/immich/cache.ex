@@ -8,10 +8,12 @@ defmodule PictureRail.Immich.Cache do
   next downloaded photo without ever waiting on the network.
 
   A pass shows every photo once before any comes round again. The photos
-  it has taken are remembered in `seen.log` next to the manifest (a line
-  appended per photo), so a restart, or the albums changing, carries on
-  with the photos the pass hasn't shown yet instead of starting over; the
-  log is cleared when a new pass starts.
+  it has downloaded are remembered in `seen.log` next to the manifest (a
+  line appended per photo, once its download is in the manifest), so a
+  restart, or the albums changing, carries on with the photos the pass
+  hasn't shown yet instead of starting over; the log is cleared when a
+  new pass starts. A download that fails or is cut short leaves its photo
+  in the pass.
 
   When new photos can be fetched, a photo that has been shown is deleted
   and the window refills. When they can't (Immich unreachable, or the
@@ -438,15 +440,15 @@ defmodule PictureRail.Immich.Cache do
     end
   end
 
-  # The next photo of the current pass that isn't on disk, now seen; the
-  # pass is (re)built when it runs out.
+  # The next photo of the current pass that isn't on disk; the pass is
+  # (re)built when it runs out.
   defp next_to_download(state, rebuilt? \\ false) do
     case Enum.split_while(
            state.pass,
            &(on_disk?(state, &1) or bad?(state, &1))
          ) do
       {_skipped, [asset | rest]} ->
-        {asset, see(%{state | pass: rest}, asset)}
+        {asset, %{state | pass: rest}}
 
       {_skipped, []} when rebuilt? ->
         {nil, %{state | pass: []}}
@@ -473,7 +475,7 @@ defmodule PictureRail.Immich.Cache do
   defp seen?(state, asset), do: MapSet.member?(state.seen, key(asset))
   defp bad?(state, asset), do: MapSet.member?(state.bad, key(asset))
 
-  # A photo taken by the pass: remembered, across restarts too.
+  # A photo the pass has downloaded: remembered, across restarts too.
   defp see(state, asset) do
     File.write(seen_path(state), seen_line(asset), [:append])
     %{state | seen: MapSet.put(state.seen, key(asset))}
@@ -549,6 +551,7 @@ defmodule PictureRail.Immich.Cache do
 
     %{state | ready: :queue.in(entry, state.ready)}
     |> write_manifest()
+    |> see(entry.asset)
     |> maybe_download()
     |> report()
   end
