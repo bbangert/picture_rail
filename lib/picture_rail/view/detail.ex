@@ -12,13 +12,18 @@ defmodule PictureRail.View.Detail do
     * climate: readings, the target or the heat/cool range (−/+), and its
       mode, fan, preset and swing lists
     * cover: open/stop/close, position
-    * media player: power, transport, shuffle/repeat, now playing, volume
-      (slider, −/+, mute), sources, sound modes
+    * media player: power, transport, shuffle/repeat, now playing (with
+      its artwork), volume (slider, −/+, mute), sources, sound modes, and
+      the players it can group with
     * lock: lock, and unlock/open behind a confirming second press
     * select: its options
+    * remote: on/off, and a D-pad for integrations whose commands are
+      known (Apple TV, Bravia)
+    * camera, image: the picture, as large as the page allows
 
   Every control sends its request (`PictureRail.HA.Actions`) to the `:ha`
-  controller.
+  controller. Pictures come from `:pictures` (`ctx.pictures`), which
+  downloads them while the detail is shown.
   """
   use Emerge.UI
 
@@ -35,6 +40,7 @@ defmodule PictureRail.View.Detail do
   @button_w 200
   @slider_h 80
   @readout_h 44
+  @art 200
   @color_modes ~w(hs xy rgb rgbw rgbww)
 
   # warm to cool white, for the colour temperature slider's track
@@ -177,7 +183,8 @@ defmodule PictureRail.View.Detail do
       now_playing(ctx, es.attributes) ++
       volume(ctx, es) ++
       if(has?.(:select_source), do: options(ctx, "Source", es, :source), else: []) ++
-      if(has?.(:select_sound_mode), do: options(ctx, "Sound mode", es, :sound_mode), else: [])
+      if(has?.(:select_sound_mode), do: options(ctx, "Sound mode", es, :sound_mode), else: []) ++
+      group(ctx, es)
   end
 
   defp controls(ctx, "lock", es, top) do
@@ -200,6 +207,35 @@ defmodule PictureRail.View.Detail do
 
   defp controls(ctx, domain, es, _top) when domain in ["select", "input_select"],
     do: options(ctx, "Options", es, :option)
+
+  defp controls(ctx, "remote", es, top) do
+    on? = es.state == "on"
+    turn = &%{domain: "remote", service: &1, entity_id: ctx.id, optimistic: &2}
+
+    pad =
+      case Map.get(ctx.ha, :slice) do
+        %{platform: platform} -> Actions.pad(platform)
+        _ -> nil
+      end
+
+    buttons(ctx, top, [
+      button(ctx, "On", call(ctx, turn.("turn_on", "on")), on?),
+      button(ctx, "Off", call(ctx, turn.("turn_off", "off")), not on?)
+    ]) ++ if(pad, do: dpad(ctx, pad), else: [])
+  end
+
+  defp controls(ctx, domain, _es, _top) when domain in ["camera", "image"] do
+    # the page less its heading
+    h = Map.get(ctx, :content_h, 600) - 66
+
+    case picture(ctx) do
+      nil ->
+        readout(["Loading"])
+
+      path ->
+        [{:block, h, picture_el(ctx, path, ctx.content_w, h)}]
+    end
+  end
 
   defp controls(ctx, _domain, es, top) do
     case Actions.tap(ctx.id, es) do
@@ -293,15 +329,24 @@ defmodule PictureRail.View.Detail do
       |> Enum.filter(&(is_binary(&1) and &1 != ""))
       |> Enum.join("  ·  ")
 
-    chars = trunc(ctx.detail_w / (Theme.size(:heading) * 0.45))
+    art = picture(ctx)
+    text_w = if art, do: ctx.detail_w - @art - 24, else: ctx.detail_w
+    chars = trunc(text_w / (Theme.size(:heading) * 0.45))
 
-    [
-      {:block, 76,
-       column([spacing(8), Font.color(Theme.color(:peach))], [
-         el([Font.size(Theme.size(:heading))], text(String.upcase(LCARS.fit(title, chars)))),
-         el([Font.size(Theme.size(:small))], text(String.upcase(by)))
-       ])}
-    ]
+    words =
+      column([spacing(8), Font.color(Theme.color(:peach))], [
+        el([Font.size(Theme.size(:heading))], text(String.upcase(LCARS.fit(title, chars)))),
+        el([Font.size(Theme.size(:small))], text(String.upcase(by)))
+      ])
+
+    case art do
+      nil ->
+        [{:block, 76, words}]
+
+      path ->
+        cover = picture_el(ctx, path, @art, @art)
+        [{:block, @art, row([spacing(24)], [cover, el([center_y()], words)])}]
+    end
   end
 
   defp now_playing(_ctx, _attrs), do: []
@@ -340,6 +385,107 @@ defmodule PictureRail.View.Detail do
       [] -> []
       rows -> [heading | rows]
     end
+  end
+
+  # Players of the same integration that can join this one's group: the
+  # ones in it bright; a press puts one in or takes it out.
+  defp group(ctx, es) do
+    with %{group: others} <- Map.get(ctx.ha, :slice),
+         heading = {:heading, ctx.color, "Group"},
+         [_ | _] = rows <- group_rows(ctx, es, others, heading) do
+      [heading | rows]
+    else
+      _ -> []
+    end
+  end
+
+  defp group_rows(ctx, es, others, heading) do
+    members = List.wrap(es.attributes["group_members"])
+    cols = if ctx.portrait?, do: 2, else: 3
+    w = Float.floor((ctx.detail_w - (cols - 1) * @gap) / cols)
+
+    others
+    |> Enum.filter(&Features.has?(ctx.ha.states[&1], :grouping))
+    |> Enum.map(fn other -> fn -> group_pill(ctx, es, other, other in members, w) end end)
+    |> Enum.chunk_every(cols)
+    |> Enum.map(&{:row, Theme.size(:pill), &1, heading})
+  end
+
+  defp group_pill(ctx, es, other, member?, w) do
+    chars = trunc((w - 60) / (Theme.size(:label) * 0.42))
+    name = Map.get(Map.get(ctx.ha, :names) || %{}, {other, :full}, other)
+    usable? = Overview.available?(ctx.ha.states[other])
+
+    LCARS.pill(
+      label: name |> LCARS.fit(chars) |> String.upcase(),
+      fill: Theme.color(if(member?, do: ctx.color, else: Theme.dim(ctx.color))),
+      width: px(w),
+      attrs: if(usable?, do: [Event.on_press(call(ctx, Actions.group(es, other)))], else: [])
+    )
+  end
+
+  # -- Remotes --
+
+  defp dpad(ctx, pad) do
+    heading = {:heading, ctx.color, "Remote"}
+    key = &button(ctx, &1, call(ctx, Actions.command(ctx.id, Map.fetch!(pad, &2))), true)
+    blank = el([width(px(@button_w)), height(px(Theme.size(:pill)))], none())
+
+    # one toggle where the integration has it, else Play and Pause
+    last =
+      if Map.has_key?(pad, :play_pause),
+        do: [key.("Play/Pause", :play_pause), key.("Down", :down), blank],
+        else: [key.("Play", :play), key.("Down", :down), key.("Pause", :pause)]
+
+    rows = [
+      [key.("Back", :back), key.("Up", :up), key.("Home", :home)],
+      [key.("Left", :left), key.("OK", :select), key.("Right", :right)],
+      last
+    ]
+
+    [heading | Enum.map(rows, &{:row, Theme.size(:pill), &1, heading})]
+  end
+
+  # -- Pictures --
+
+  # the shown entity's picture, once `:pictures` has it
+  defp picture(ctx) do
+    case Map.get(ctx, :pictures) do
+      %{entity_id: id, path: path} when id == ctx.id and is_binary(path) -> path
+      _ -> nil
+    end
+  end
+
+  # The picture fades in over the one before it, on its own black layer
+  # (keyed by its file), as the photos do: a refresh doesn't blink, and
+  # nothing of the old picture shows in the new one's letterbox bars or
+  # through its transparency. The fade also matters to Emerge: it draws a
+  # loaded image at its next frame, but a fixed-size element's load
+  # doesn't bring one about by itself (it only relayouts, and nothing
+  # moves); the fade draws frames for 0.4 s, and a snapshot decodes in less.
+  defp picture_el(ctx, path, w, h) do
+    under =
+      case Map.get(ctx.pictures, :previous) do
+        nil -> []
+        previous -> [Background.image({:path, previous}, fit: :contain)]
+      end
+
+    el(
+      [width(px(w)), height(px(h))] ++ under,
+      el(
+        [
+          key({:picture, path}),
+          width(fill()),
+          height(fill()),
+          Background.color(Theme.color(:black)),
+          Animation.animate_enter([[Transform.alpha(0.0)], [Transform.alpha(1.0)]], 400, :linear)
+        ],
+        el(
+          [width(fill()), height(fill()), Background.image({:path, path}, fit: :contain)],
+          none()
+        )
+      )
+    )
   end
 
   # -- Locks --

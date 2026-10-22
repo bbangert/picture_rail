@@ -37,7 +37,8 @@ defmodule PictureRail.HA.Features do
       play: 16_384,
       shuffle_set: 32_768,
       select_sound_mode: 65_536,
-      repeat_set: 262_144
+      repeat_set: 262_144,
+      grouping: 524_288
     ]
   }
 

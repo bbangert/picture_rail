@@ -18,7 +18,7 @@ defmodule PictureRail.HA.Actions do
     "button" => "press",
     "input_button" => "press"
   }
-  @details ~w(light climate cover media_player lock select input_select)
+  @details ~w(light climate cover media_player lock select input_select remote camera image)
 
   @doc "What tapping an entity's pill does: toggle or run it, or `nil` (nothing)."
   @spec tap(String.t(), Hassock.EntityState.t() | nil) :: map() | nil
@@ -360,6 +360,63 @@ defmodule PictureRail.HA.Actions do
     |> media("repeat_set")
     |> Map.merge(%{data: %{repeat: next}, optimistic_attrs: %{"repeat" => next}})
   end
+
+  @doc """
+  Put `other` in a grouping player's group, or take it out: the leader
+  (first of `group_members`) leaves by taking this player out instead.
+  """
+  @spec group(Hassock.EntityState.t(), String.t()) :: map()
+  def group(%{entity_id: id, attributes: attrs}, other) do
+    members = List.wrap(attrs["group_members"])
+
+    cond do
+      other not in members ->
+        id |> media("join") |> Map.put(:data, %{group_members: [other]})
+
+      other == List.first(members) ->
+        media(id, "unjoin")
+
+      true ->
+        media(other, "unjoin")
+    end
+  end
+
+  # -- Remotes --
+
+  # A remote's navigation commands, by integration: the D-pad, back,
+  # home, and play/pause as one toggle or as play and pause.
+  @pads %{
+    "apple_tv" => %{
+      up: "up",
+      down: "down",
+      left: "left",
+      right: "right",
+      select: "select",
+      back: "menu",
+      home: "home",
+      play_pause: "play_pause"
+    },
+    "braviatv" => %{
+      up: "Up",
+      down: "Down",
+      left: "Left",
+      right: "Right",
+      select: "Confirm",
+      back: "Return",
+      home: "Home",
+      play: "Play",
+      pause: "Pause"
+    }
+  }
+
+  @doc "A remote's navigation commands, for its integration (`nil`: none known)."
+  @spec pad(String.t() | nil) :: %{atom() => String.t()} | nil
+  def pad(platform), do: Map.get(@pads, platform)
+
+  @doc "Send a remote one command."
+  @spec command(String.t(), String.t()) :: map()
+  def command(id, command),
+    do: %{domain: "remote", service: "send_command", entity_id: id, data: %{command: command}}
 
   # -- Locks --
 

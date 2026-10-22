@@ -36,6 +36,10 @@ defmodule PictureRail.App.Panel do
   callback, given what's configured) it opens on Wi-Fi setup by itself, a
   few seconds after it starts.
 
+  Whenever it changes, the view on screen (`nil` when the panel is down)
+  goes to the `:viewing` callback (to `:pictures`, which downloads a
+  camera's snapshot only while it's shown).
+
   Exposes `%{visible?: boolean, view: view, depth: n, page: n, nav_page: n}`.
   """
   use Solve.Controller,
@@ -57,38 +61,48 @@ defmodule PictureRail.App.Panel do
   # The stack holds `{view, page}`; the overview's page is `root_page`.
   defp fresh, do: %{visible?: false, stack: [], root_page: 0, nav_page: 0, token: nil}
 
-  def show(_payload, state, deps), do: %{state | visible?: true} |> restart_timer(deps)
+  def show(_payload, state, deps, callbacks),
+    do: %{state | visible?: true} |> restart_timer(deps) |> viewing(callbacks)
 
   def activity(_payload, %{visible?: true} = state, deps), do: restart_timer(state, deps)
   def activity(_payload, state, _deps), do: state
 
   def open(view, state, deps, callbacks) do
     open_setup(view, callbacks)
-    %{state | visible?: true, stack: [{view, 0} | state.stack]} |> restart_timer(deps)
+
+    %{state | visible?: true, stack: [{view, 0} | state.stack]}
+    |> restart_timer(deps)
+    |> viewing(callbacks)
   end
 
   def replace(view, %{stack: [_ | rest]} = state, deps, callbacks) do
     open_setup(view, callbacks)
-    %{state | visible?: true, stack: [{view, 0} | rest]} |> restart_timer(deps)
+
+    %{state | visible?: true, stack: [{view, 0} | rest]}
+    |> restart_timer(deps)
+    |> viewing(callbacks)
   end
 
   def replace(view, state, deps, callbacks), do: open(view, state, deps, callbacks)
 
-  def goto(:overview, state, deps, _callbacks),
-    do: %{state | visible?: true, stack: [], root_page: 0} |> restart_timer(deps)
+  def goto(:overview, state, deps, callbacks),
+    do:
+      %{state | visible?: true, stack: [], root_page: 0}
+      |> restart_timer(deps)
+      |> viewing(callbacks)
 
   def goto(view, state, deps, callbacks) do
     open_setup(view, callbacks)
-    %{state | visible?: true, stack: [{view, 0}]} |> restart_timer(deps)
+    %{state | visible?: true, stack: [{view, 0}]} |> restart_timer(deps) |> viewing(callbacks)
   end
 
   defp open_setup({:setup, section}, %{open_setup: open}), do: open.(section)
   defp open_setup(_view, _callbacks), do: :ok
 
-  def back(_payload, %{stack: [_ | rest]} = state, deps),
-    do: %{state | stack: rest} |> restart_timer(deps)
+  def back(_payload, %{stack: [_ | rest]} = state, deps, callbacks),
+    do: %{state | stack: rest} |> restart_timer(deps) |> viewing(callbacks)
 
-  def back(_payload, state, deps), do: restart_timer(state, deps)
+  def back(_payload, state, deps, _callbacks), do: restart_timer(state, deps)
 
   def page(n, %{stack: [{view, _} | rest]} = state, deps),
     do: %{state | stack: [{view, n} | rest]} |> restart_timer(deps)
@@ -97,9 +111,11 @@ defmodule PictureRail.App.Panel do
 
   def nav_page(n, state, deps), do: %{state | nav_page: n} |> restart_timer(deps)
 
-  def hide(_payload, _state), do: fresh()
+  def hide(_payload, _state, _deps, callbacks), do: viewing(fresh(), callbacks)
 
-  def handle_info({:timeout, token}, state, deps, _callbacks), do: timed_out(token, state, deps)
+  def handle_info({:timeout, token}, state, deps, callbacks),
+    do: token |> timed_out(state, deps) |> viewing(callbacks)
+
   def handle_info(:first_boot, state, deps, callbacks), do: first_boot(state, deps, callbacks)
   def handle_info(_message, state, _deps, _callbacks), do: state
 
@@ -128,6 +144,18 @@ defmodule PictureRail.App.Panel do
     do: if(busy_setup?(state, deps), do: restart_timer(state, deps), else: fresh())
 
   def timed_out(_token, state, _deps), do: state
+
+  # The view on screen, to the `:viewing` callback (if there is one).
+  defp viewing(state, callbacks) do
+    view = if state.visible?, do: state.stack |> List.first({:overview, 0}) |> elem(0)
+
+    case callbacks do
+      %{viewing: viewing} -> viewing.(view)
+      _ -> :ok
+    end
+
+    state
+  end
 
   # A fresh token per restart: a timeout already in the mailbox from an
   # earlier one is ignored.

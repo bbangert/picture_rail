@@ -3,7 +3,7 @@ defmodule PictureRail.App.HATest do
 
   alias Hassock.EntityState
   alias PictureRail.App.HA
-  alias PictureRail.HA.{Actions, Overview}
+  alias PictureRail.HA.{Actions, Index, Model, Overview}
   alias PictureRail.HAFixture
 
   # The source reads entity states from the test process, so a test can
@@ -433,6 +433,63 @@ defmodule PictureRail.App.HATest do
 
     report("climate.hall", set.(69))
     assert HA.states(["climate.hall"], state, deps, %{}, params).pending == %{}
+  end
+
+  test "an entity's detail: its integration, and the players it can group with", %{
+    state: state
+  } do
+    player = fn id, platform, features ->
+      {%{
+         "entity_id" => id,
+         "platform" => platform,
+         "device_id" => nil,
+         "has_entity_name" => false
+       },
+       %EntityState{
+         entity_id: id,
+         state: "idle",
+         attributes: %{"supported_features" => features, "friendly_name" => id}
+       }}
+    end
+
+    # 524_288: grouping
+    players = [
+      player.("media_player.kitchen", "music_assistant", 524_288),
+      player.("media_player.office", "music_assistant", 524_288),
+      player.("media_player.attic", "music_assistant", 0),
+      player.("media_player.den", "sonos", 524_288)
+    ]
+
+    registries = HAFixture.registries()
+
+    registries = %{
+      registries
+      | entity:
+          registries.entity ++
+            Enum.map(players, fn {entry, _} -> Hassock.Registries.decode(:entity, entry) end)
+    }
+
+    states =
+      Map.merge(HAFixture.states(), Map.new(players, fn {_, es} -> {es.entity_id, es} end))
+
+    table = :"ha_group_#{System.unique_integer([:positive])}"
+    :ets.new(table, [:named_table, :public])
+    Model.store(table, Index.build(registries, Map.keys(states)), 1)
+    params = %{source: %{table: table, state: &Map.get(states, &1)}}
+
+    exposed = HA.expose(state, panel({:entity, "media_player.kitchen"}), params)
+
+    # every player of the integration (the view keeps those that group:
+    # a player's state says so, and it's on screen, so a change shows)
+    assert %{platform: "music_assistant", group: ["media_player.attic", "media_player.office"]} =
+             exposed.slice
+
+    assert Map.keys(exposed.states) |> Enum.sort() ==
+             ["media_player.attic", "media_player.kitchen", "media_player.office"]
+
+    # one that doesn't group: none
+    assert %{platform: "music_assistant", group: []} =
+             HA.expose(state, panel({:entity, "media_player.attic"}), params).slice
   end
 
   test "slice ids cover summaries, sections, badges and readouts", %{src: src} do
