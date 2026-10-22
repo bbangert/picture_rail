@@ -103,6 +103,7 @@ defmodule PictureRail.Immich.CacheTest do
       end
 
       result = call(agent, :download, fn s -> Map.get(s.formats, id, :ok) end)
+      if result == :raise, do: raise("download blew up")
       if result == :ok, do: File.write!(path, <<0xFF, 0xD8, 0xFF, "photo ", id::binary>>)
       result
     end
@@ -481,7 +482,18 @@ defmodule PictureRail.Immich.CacheTest do
   end
 
   test "a photo that keeps timing out doesn't stop the next passes", %{tmp_dir: dir} do
-    agent = Fake.start(Enum.map(1..4, &asset/1), formats: %{"p2" => {:error, :offline}})
+    keeps_failing(dir, {:error, :offline})
+  end
+
+  @tag :capture_log
+  test "a photo whose download keeps crashing doesn't stop the next passes", %{tmp_dir: dir} do
+    keeps_failing(dir, :raise)
+  end
+
+  # p2's download always fails as `failure`: the good photos still cycle,
+  # pass after pass, and p2 is shown once its download works.
+  defp keeps_failing(dir, failure) do
+    agent = Fake.start(Enum.map(1..4, &asset/1), formats: %{"p2" => failure})
     {_pid, cache} = start_cache(agent, dir, window: 1)
     wait_ready(1)
 

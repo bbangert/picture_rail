@@ -177,9 +177,12 @@ defmodule PictureRail.Immich.Cache do
     {:noreply, download_done(result, asset, gen, %{state | download: nil})}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %{download: {ref, asset, _gen}} = state) do
+  # A crashed download counts as a failed one (tried again next pass).
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{download: {ref, asset, gen}} = state) do
     Logger.warning("Immich cache: download of #{asset.id} crashed: #{inspect(reason)}")
-    {:noreply, %{state | download: nil} |> maybe_download()}
+    state = %{state | download: nil}
+    state = if gen == state.gen, do: tried(state, asset), else: state
+    {:noreply, maybe_download(state)}
   end
 
   # The settings controller changed: re-read them (with credentials).
