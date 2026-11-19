@@ -22,6 +22,7 @@ defmodule PictureRail.MixProject do
       deps_path: "deps/#{Mix.target()}",
       deps: deps(),
       dialyzer: dialyzer(),
+      argus: argus(),
       releases: [{@app, release()}]
     ]
   end
@@ -94,6 +95,25 @@ defmodule PictureRail.MixProject do
 
     {:nerves_system_rk3326_frame156,
      path: path, runtime: false, targets: :frame156, nerves: [compile: true]}
+  end
+
+  defp argus do
+    [
+      ignore: [
+        findings: [
+          # PictureRail.App's GenServer callbacks come from `use Solve`, and
+          # Solve.Runtime.init/2 traps exits, so terminate/2 does run on a
+          # supervisor shutdown; argus can't see into the library's init.
+          {:shutdown, {PictureRail.App, :terminate, 2}},
+          # rest_for_one leaves the source running when the manager restarts
+          # alone; Manager.init/1 finds it through the registry and adopts it.
+          {:coupling, {PictureRail.PhotoSource.Manager, :start, 3}},
+          # The manager monitors the Solve app (to resubscribe), not the
+          # sources it terminates, so no :DOWN reaches it for those.
+          {:shutdown, {PictureRail.PhotoSource.Manager, :stop, 1}}
+        ]
+      ]
+    ]
   end
 
   defp dialyzer do

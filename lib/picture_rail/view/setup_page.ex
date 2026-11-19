@@ -66,8 +66,13 @@ defmodule PictureRail.View.SetupPage do
     Enum.join([label, albums] ++ photo_count(photos), " · ")
   end
 
-  def section_summary(:home_assistant, %{settings: %{home_assistant: %{"url" => url}}}, _, _),
-    do: URI.parse(url).host || url
+  def section_summary(:home_assistant, %{settings: %{home_assistant: %{"url" => url}}}, _, _)
+      when is_binary(url) do
+    case URI.parse(url) do
+      %URI{host: host} when is_binary(host) -> host
+      _no_host -> url
+    end
+  end
 
   def section_summary(:display, %{settings: %{slideshow: slideshow}}, _photos, _network),
     do: "Every #{seconds(slideshow.interval_ms)} · fade #{seconds(slideshow.fade_ms)}"
@@ -94,7 +99,7 @@ defmodule PictureRail.View.SetupPage do
     * `{:choices, id, label, choices, selected, error}` - `choices` as the
       controller has them (`:idle`, `:loading`, `{:ok, list}`, `{:error, text}`)
   """
-  @spec field_rows(map(), map(), map()) :: [tuple()]
+  @spec field_rows(map(), map(), map() | nil) :: [tuple()]
   def field_rows(%{section: section, draft: draft} = setup, public, _photos) do
     for {name, %Field{} = f} <- Setup.fields(section, draft) do
       id = {name, f.key}

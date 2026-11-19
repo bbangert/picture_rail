@@ -28,11 +28,21 @@ defmodule PictureRail.View.Status do
       :offline -> "#{if source, do: source.label(), else: "Photos"} offline"
       :online when photos.photos == 0 -> "No photos to show"
       generic when generic in [:unconfigured, :connecting, :online] -> "Loading photos"
-      own -> (source && PhotoSource.status_message(source, own)) || "Loading photos"
+      own -> own_message(source, own)
     end
   end
 
   defp photo_message(_settings, _photos), do: "Loading photos"
+
+  # The source's own wording for a status of its own, if it has one.
+  defp own_message(nil, _status), do: "Loading photos"
+
+  defp own_message(source, status) do
+    case PhotoSource.status_message(source, status) do
+      message when is_binary(message) -> message
+      nil -> "Loading photos"
+    end
+  end
 
   defp source(%{photo_source_type: type}) when is_binary(type) do
     case PhotoSource.module_for(type) do

@@ -110,6 +110,6 @@ defmodule PictureRail.View.Theme do
   }
 
   @doc "A size or font size, in px."
-  @spec size(atom()) :: number()
+  @spec size(atom()) :: pos_integer()
   def size(name), do: Map.fetch!(@sizes, name)
 end
