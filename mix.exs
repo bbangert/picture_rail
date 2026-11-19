@@ -64,11 +64,10 @@ defmodule PictureRail.MixProject do
 
       # The settings web page (paired from the frame's Setup page)
       {:plug, "~> 1.18"},
-      # 1.12.5's advisories (EEF-CVE-2026-105659/105660) don't apply with
-      # HTTP/2 off and conn.host unused (PictureRail.Web); move to 1.13
-      # (and thousand_island 1.6) once they're two weeks old.
-      {:bandit, "~> 1.12.5"},
-      {:thousand_island, "~> 1.5.0"},
+      # Held below the newest release until it is two weeks old; 1.14.1
+      # clears every advisory `mix hex.audit` reports against 1.12.x.
+      {:bandit, "~> 1.14.1"},
+      {:thousand_island, "~> 1.6.0"},
       {:eqrcode, "~> 0.2.1"},
 
       # Dependencies for all targets except :host
