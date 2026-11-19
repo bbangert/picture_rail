@@ -57,7 +57,7 @@ defmodule PictureRail.MixProject do
       # UI, state, Home Assistant and Immich
       {:emerge, "~> 0.5.0"},
       {:solve, "~> 0.3.1"},
-      {:hassock, "~> 0.3.0"},
+      {:hassock, "~> 0.4.1"},
       {:req, "~> 0.7.5"},
       {:jason, "~> 1.4"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
