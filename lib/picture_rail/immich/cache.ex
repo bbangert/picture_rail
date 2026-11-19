@@ -500,7 +500,7 @@ defmodule PictureRail.Immich.Cache do
   # Photos that left the albums no longer count as seen.
   defp forget_removed(state) do
     keys = MapSet.new(state.index, &key/1)
-    seen = MapSet.filter(state.seen, &MapSet.member?(keys, &1))
+    seen = for key <- state.seen, MapSet.member?(keys, key), into: MapSet.new(), do: key
     if seen == state.seen, do: state, else: write_seen(state, seen)
   end
 

@@ -59,6 +59,13 @@ defmodule PictureRail.App.SettingsTest do
   end
 
   test "a (re)started controller picks the settings up from the running watcher" do
+    # the singleton watcher reads the test data dir's settings file; give
+    # it one (a clean checkout has none) so it has loaded something
+    path = PictureRail.Paths.settings_file()
+    File.mkdir_p!(Path.dirname(path))
+    unless File.exists?(path), do: File.write!(path, "{}")
+    Settings.Watcher.reload()
+
     # the watcher is the app's singleton; its first report can come before
     # the app is up, so init's read is what a fresh controller has
     {settings, status, 0} = Controller.init(nil, %{})

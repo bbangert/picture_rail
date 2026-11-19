@@ -131,7 +131,10 @@ defmodule PictureRail.HA.Picture do
     end
   end
 
-  # HA's own HTTPS server, when it's set not to verify (a self-signed cert)
+  # HA's own HTTPS server, when it's set not to verify (a self-signed cert).
+  # Opt-in per install (`ssl_verify: false`) and only for the configured
+  # HA host, never for picture URLs on other hosts.
+  # sobelow_skip ["Config.TLSVerify"]
   defp ssl("https:" <> _ = url, %Settings.HomeAssistant{ssl_verify: false} = ha) do
     if own_server?(url, ha.url), do: [transport_opts: [verify: :verify_none]], else: []
   end

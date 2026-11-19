@@ -11,6 +11,7 @@ defmodule PictureRail.Immich.Client do
     * `{:unsupported_format, content_type}` - a preview that isn't JPEG or
       PNG (the server's preview format is set to WebP)
     * `{:http_error, status}` - anything else
+    * `:unexpected_answer` - a 2xx whose body isn't what Immich sends
 
   The request holds the API key, so the struct's `inspect/1` leaves it out.
   """
@@ -31,6 +32,7 @@ defmodule PictureRail.Immich.Client do
           | :offline
           | {:unsupported_format, String.t() | nil}
           | {:http_error, pos_integer()}
+          | :unexpected_answer
 
   @page_size 1000
 
@@ -66,7 +68,11 @@ defmodule PictureRail.Immich.Client do
   @spec ping(t()) :: :ok | {:error, error()}
   @impl PictureRail.Immich.Api
   def ping(client) do
-    with {:ok, %{"res" => "pong"}} <- request(client, :get, "/server/ping"), do: :ok
+    case request(client, :get, "/server/ping") do
+      {:ok, %{"res" => "pong"}} -> :ok
+      {:ok, _body} -> {:error, :unexpected_answer}
+      {:error, _} = error -> error
+    end
   end
 
   @doc "The server's version, `{major, minor, patch}`."

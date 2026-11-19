@@ -276,6 +276,9 @@ defmodule PictureRail.Web.Router do
 
   defp csrf, do: Plug.CSRFProtection.get_csrf_token()
 
+  # Every body comes from a PictureRail.Web.Page template, which escapes
+  # what it prints with Page.h/1; the CSP also allows no scripts.
+  # sobelow_skip ["XSS.SendResp"]
   defp html(conn, status, body) do
     conn
     |> put_resp_content_type("text/html")
