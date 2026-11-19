@@ -21,6 +21,7 @@ defmodule PictureRail.MixProject do
       # priv/, which the host and the device would otherwise share.
       deps_path: "deps/#{Mix.target()}",
       deps: deps(),
+      dialyzer: dialyzer(),
       releases: [{@app, release()}]
     ]
   end
@@ -61,6 +62,9 @@ defmodule PictureRail.MixProject do
       {:req, "~> 0.7.5"},
       {:jason, "~> 1.4"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:sobelow, "~> 0.14", only: [:dev, :test], runtime: false},
+      {:argus_beam, "~> 0.20", only: [:dev, :test], runtime: false},
 
       # The settings web page (paired from the frame's Setup page)
       {:plug, "~> 1.18"},
@@ -90,6 +94,15 @@ defmodule PictureRail.MixProject do
 
     {:nerves_system_rk3326_frame156,
      path: path, runtime: false, targets: :frame156, nerves: [compile: true]}
+  end
+
+  defp dialyzer do
+    [
+      plt_add_apps: [:mix, :ex_unit],
+      plt_local_path: "priv/plts/project.plt",
+      plt_core_path: "priv/plts/core.plt",
+      flags: [:error_handling, :unknown, :extra_return, :missing_return]
+    ]
   end
 
   def release do
