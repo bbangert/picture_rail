@@ -119,8 +119,9 @@ defmodule PictureRail.MixProject do
   defp dialyzer do
     [
       plt_add_apps: [:mix, :ex_unit],
-      plt_local_path: "priv/plts/project.plt",
-      plt_core_path: "priv/plts/core.plt",
+      # Outside priv/: a release (the firmware) packs the app's priv/.
+      plt_local_path: ".plts/project.plt",
+      plt_core_path: ".plts/core.plt",
       flags: [:error_handling, :unknown, :extra_return, :missing_return]
     ]
   end

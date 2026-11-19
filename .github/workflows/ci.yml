@@ -18,6 +18,9 @@ env:
   MIX_TARGET: host
   OTP_VERSION: "29.1.2"
   ELIXIR_VERSION: "1.20.4-otp-29"
+  # libmnl-dev: nerves_uevent's port (a dependency of nerves_runtime)
+  # compiles on the host too.
+  APT_PACKAGES: build-essential libmnl-dev
 
 jobs:
   test:
@@ -27,6 +30,8 @@ jobs:
       MIX_ENV: test
     steps:
       - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
       - uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ env.OTP_VERSION }}
@@ -51,6 +56,8 @@ jobs:
       MIX_ENV: test
     steps:
       - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
       - uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ env.OTP_VERSION }}
@@ -74,6 +81,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
       - uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ env.OTP_VERSION }}
@@ -96,6 +105,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
       - uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ env.OTP_VERSION }}
@@ -115,7 +126,7 @@ jobs:
       - name: Cache Dialyzer PLTs
         uses: actions/cache@v4
         with:
-          path: priv/plts
+          path: .plts
           key: plt-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
           restore-keys: |
             plt-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
@@ -128,6 +139,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
       - uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ env.OTP_VERSION }}
@@ -152,6 +165,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
       - uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ env.OTP_VERSION }}
@@ -168,6 +183,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
       - uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ env.OTP_VERSION }}
