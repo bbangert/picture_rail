@@ -127,7 +127,10 @@ defmodule PictureRail.App.PanelTest do
 
     callbacks = fn first_boot? ->
       %{
-        first_boot?: fn configured -> send(test, {:asked, configured}) && first_boot? end,
+        first_boot?: fn configured ->
+          send(test, {:asked, configured})
+          first_boot?
+        end,
         open_setup: &send(test, {:editor, &1})
       }
     end
