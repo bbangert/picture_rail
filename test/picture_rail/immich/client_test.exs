@@ -40,6 +40,14 @@ defmodule PictureRail.Immich.ClientTest do
     refute inspect(client) =~ "secret"
   end
 
+  test "a server that answers the ping with something else isn't Immich", %{
+    stub: stub,
+    client: client
+  } do
+    stub(stub, &Req.Test.json(&1, %{"status" => "ok"}))
+    assert Client.ping(client) == {:error, :unexpected_answer}
+  end
+
   test "version and albums from recorded responses", %{stub: stub, client: client} do
     stub(stub, fn
       %{request_path: "/api/server/version"} = conn ->

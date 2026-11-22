@@ -334,6 +334,14 @@ defmodule PictureRail.Network do
 
   defp cancel_scan(state) do
     Process.cancel_timer(state.scan_timer)
+
+    # a :scan that fired just before the cancel would scan again
+    receive do
+      :scan -> :ok
+    after
+      0 -> :ok
+    end
+
     %{state | scan_timer: nil}
   end
 

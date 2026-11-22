@@ -62,8 +62,19 @@ defmodule PictureRail.App.Slideshow do
   defp advance(state, :none, _fade), do: state
 
   defp schedule(state, ms) do
-    if state.timer, do: Process.cancel_timer(state.timer)
+    if state.timer, do: cancel_tick(state.timer)
     %{state | timer: Process.send_after(self(), :tick, ms)}
+  end
+
+  # A :tick that fired just before the cancel would advance twice.
+  defp cancel_tick(timer) do
+    Process.cancel_timer(timer)
+
+    receive do
+      :tick -> :ok
+    after
+      0 -> :ok
+    end
   end
 
   defp to_photo(%{id: id, path: path, width: width, height: height}) do

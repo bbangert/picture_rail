@@ -1,0 +1,203 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every job runs at MIX_TARGET=host. The frame156 Nerves system is a path
+# dependency limited to `targets: :frame156`, so it is never fetched here.
+env:
+  MIX_TARGET: host
+  OTP_VERSION: "29.1.2"
+  ELIXIR_VERSION: "1.20.4-otp-29"
+  # libmnl-dev: nerves_uevent's port (a dependency of nerves_runtime)
+  # compiles on the host too.
+  APT_PACKAGES: build-essential libmnl-dev
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+      - run: mix archive.install hex nerves_bootstrap --force
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-test-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            mix-test-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+      - run: mix deps.get --check-locked
+      - run: mix test --warnings-as-errors
+
+  compile-format:
+    name: Compile · Format
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+      - run: mix archive.install hex nerves_bootstrap --force
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-compile-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            mix-compile-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+      - run: mix deps.get --check-locked
+      - run: mix compile --warnings-as-errors
+      - run: mix format --check-formatted
+
+  credo:
+    name: Credo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+      - run: mix archive.install hex nerves_bootstrap --force
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-dev-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            mix-dev-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+      - run: mix deps.get --check-locked
+      - run: mix credo --strict
+
+  dialyzer:
+    name: Dialyzer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+      - run: mix archive.install hex nerves_bootstrap --force
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-dev-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            mix-dev-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+      # PLTs are keyed by OTP + Elixir + mix.lock; restore-keys reuse an
+      # older PLT so only the incremental build is paid after a dep change.
+      - name: Cache Dialyzer PLTs
+        uses: actions/cache@v4
+        with:
+          path: .plts
+          key: plt-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            plt-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+      - run: mix deps.get --check-locked
+      - run: mix dialyzer --plt
+      - run: mix dialyzer --format github
+
+  sobelow:
+    name: Sobelow
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+      - run: mix archive.install hex nerves_bootstrap --force
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-dev-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            mix-dev-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+      - run: mix deps.get --check-locked
+      # A Plug app, not Phoenix: Sobelow skips the router-based checks and
+      # scans the rest (XSS.SendResp, Config, Traversal, RCE, DOS, ...).
+      - run: mix sobelow --private --skip --exit --threshold medium
+
+  audit:
+    name: Hex audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+      - run: mix archive.install hex nerves_bootstrap --force
+      - run: mix deps.get --check-locked
+      # `mix deps.unlock --check-unused` is not run: at MIX_TARGET=host the
+      # frame156 system's own deps (nerves_system_br, the toolchain) are in
+      # mix.lock but unused, because the system is never resolved here.
+      - run: mix hex.audit
+
+  argus:
+    name: Argus
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build deps
+        run: sudo apt-get update || true; sudo apt-get install -y ${{ env.APT_PACKAGES }}
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+      - run: mix archive.install hex nerves_bootstrap --force
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-argus-u2404-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            mix-argus-u2404-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+      - run: mix deps.get --check-locked
+      - run: mix argus --fail-above 0

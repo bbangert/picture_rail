@@ -59,6 +59,39 @@ defmodule PictureRail.App.SlideshowTest do
     assert Slideshow.expose(state, @deps, nil).current.id == "p2"
   end
 
+  test "rescheduling drops a tick its old timer already delivered" do
+    callbacks = photos([entry(1), entry(2), entry(3)])
+    state = Slideshow.tick(init(), @deps, callbacks)
+
+    # let the timer fire, so its :tick is waiting in the mailbox
+    wait_until(fn -> Process.read_timer(state.timer) == false end)
+    {:messages, waiting} = Process.info(self(), :messages)
+    assert :tick in waiting
+
+    # rescheduling now (a tick handled out of turn) must not leave that
+    # one behind, or the slideshow would advance twice
+    state = Slideshow.tick(state, @deps, callbacks)
+    refute_received :tick
+    assert Slideshow.expose(state, @deps, nil).current.id == "p2"
+
+    # the replacement timer still ticks, once
+    assert_receive :tick, 1_000
+    refute_receive :tick, 100
+  end
+
+  defp wait_until(fun, tries \\ 200) do
+    cond do
+      fun.() -> :ok
+      tries == 0 -> flunk("timed out waiting")
+      true -> wait_again(fun, tries)
+    end
+  end
+
+  defp wait_again(fun, tries) do
+    Process.sleep(5)
+    wait_until(fun, tries - 1)
+  end
+
   test "with nothing to show yet it looks again soon; the same photo isn't re-shown" do
     # soon: the empty retry (2 s), not the (here, minute-long) slide interval
     slow = put_in(@deps.settings.settings.slideshow.interval_ms, 60_000)

@@ -21,6 +21,8 @@ defmodule PictureRail.MixProject do
       # priv/, which the host and the device would otherwise share.
       deps_path: "deps/#{Mix.target()}",
       deps: deps(),
+      dialyzer: dialyzer(),
+      argus: argus(),
       releases: [{@app, release()}]
     ]
   end
@@ -57,18 +59,20 @@ defmodule PictureRail.MixProject do
       # UI, state, Home Assistant and Immich
       {:emerge, "~> 0.5.0"},
       {:solve, "~> 0.3.1"},
-      {:hassock, "~> 0.3.0"},
+      {:hassock, "~> 0.4.1"},
       {:req, "~> 0.7.5"},
       {:jason, "~> 1.4"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:sobelow, "~> 0.14", only: [:dev, :test], runtime: false},
+      {:argus_beam, "~> 0.20", only: [:dev, :test], runtime: false},
 
       # The settings web page (paired from the frame's Setup page)
       {:plug, "~> 1.18"},
-      # 1.12.5's advisories (EEF-CVE-2026-105659/105660) don't apply with
-      # HTTP/2 off and conn.host unused (PictureRail.Web); move to 1.13
-      # (and thousand_island 1.6) once they're two weeks old.
-      {:bandit, "~> 1.12.5"},
-      {:thousand_island, "~> 1.5.0"},
+      # Held below the newest release until it is two weeks old; 1.14.1
+      # clears every advisory `mix hex.audit` reports against 1.12.x.
+      {:bandit, "~> 1.14.1"},
+      {:thousand_island, "~> 1.6.0"},
       {:eqrcode, "~> 0.2.1"},
 
       # Dependencies for all targets except :host
@@ -91,6 +95,35 @@ defmodule PictureRail.MixProject do
 
     {:nerves_system_rk3326_frame156,
      path: path, runtime: false, targets: :frame156, nerves: [compile: true]}
+  end
+
+  defp argus do
+    [
+      ignore: [
+        findings: [
+          # PictureRail.App's GenServer callbacks come from `use Solve`, and
+          # Solve.Runtime.init/2 traps exits, so terminate/2 does run on a
+          # supervisor shutdown; argus can't see into the library's init.
+          {:shutdown, {PictureRail.App, :terminate, 2}},
+          # rest_for_one leaves the source running when the manager restarts
+          # alone; Manager.init/1 finds it through the registry and adopts it.
+          {:coupling, {PictureRail.PhotoSource.Manager, :start, 3}},
+          # The manager monitors the Solve app (to resubscribe), not the
+          # sources it terminates, so no :DOWN reaches it for those.
+          {:shutdown, {PictureRail.PhotoSource.Manager, :stop, 1}}
+        ]
+      ]
+    ]
+  end
+
+  defp dialyzer do
+    [
+      plt_add_apps: [:mix, :ex_unit],
+      # Outside priv/: a release (the firmware) packs the app's priv/.
+      plt_local_path: ".plts/project.plt",
+      plt_core_path: ".plts/core.plt",
+      flags: [:error_handling, :unknown, :extra_return, :missing_return]
+    ]
   end
 
   def release do
